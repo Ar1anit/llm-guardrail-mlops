@@ -31,7 +31,7 @@ dependencies = [
 
 [project.optional-dependencies]
 training = [
-  "datasets>=3,<5",
+  "datasets>=3,<6",
   "optimum>=1.23,<3",
   "scikit-learn>=1.6,<2",
   "torch>=2.5,<3",
@@ -46,10 +46,10 @@ mlops = [
 
 [dependency-groups]
 dev = [
-  "mypy>=1.13,<2",
+  "mypy>=1.13,<3",
   "pre-commit>=4,<5",
   "pytest>=8.3,<10",
-  "pytest-cov>=6,<7",
+  "pytest-cov>=6,<8",
   "ruff>=0.8,<1",
 ]
 
@@ -98,4 +98,3 @@ source = ["src"]
 show_missing = true
 skip_covered = true
 fail_under = 90
-
