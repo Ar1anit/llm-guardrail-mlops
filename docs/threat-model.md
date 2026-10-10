@@ -29,3 +29,39 @@ The project does not yet define a default allow, block, or escalation policy. A 
 release must document fail-open versus fail-closed behavior, uncertainty handling, threshold
 ownership, and human-review procedures.
 
+## Training pipeline controls and gaps
+
+Implemented in `src/training/`:
+
+- **Golden-dataset contamination and leakage:** only the `train` and `validation` splits are
+  accepted. Every training and validation input is compared, after tokenization, with the
+  golden file and with the other split, so renamed copies, case variants, and prompts that differ
+  only beyond the truncation limit are rejected. Checkpoints are selected on validation data.
+- **Artifact substitution and provenance:** exports are immutable, checked against PyTorch before
+  publishing, and accompanied by a manifest with a SHA-256 for every file and for the dataset
+  files, taken before parsing and verified again at export. The base model must be pinned to a
+  commit SHA, and manifest metrics are attached only to the exact weights they were computed on.
+- **Silent unsafe decisions:** non-finite logits, a non-finite training loss, metrics over a
+  missing class, and a model that predicts one class for every validation row raise instead of
+  producing predictions, numbers, or an artifact.
+- **Sensitive data exposure:** validation errors never include prompt text, and no experiment
+  tracker is enabled.
+
+Known gaps:
+
+- The manifest checksums detect accidental change but are not signatures: anyone who can write the
+  export directory can rewrite a file and its checksum. Signing and a model registry are needed
+  before production.
+- Exports are immutable only against this pipeline. Concurrent writers to one output directory,
+  or someone who can replace the directory between the final check and the rename, are not
+  handled.
+- `dataset_revision` is recorded but not verified against the DVC-tracked files; the manifest
+  records the SHA-256 of the files actually used.
+- Prompts longer than `max_sequence_length` are truncated, so a payload placed after the limit is
+  not seen.
+- Duplicate detection is exact on tokenized input. Paraphrases and other near-duplicates are not
+  detected, and there are no minimum class, attack-type, or balance requirements.
+- The export check rejects a model that predicts one class, but there is no quality threshold:
+  deciding whether a model is good enough is a release decision (see model governance).
+- The ONNX export uses PyTorch's legacy exporter, which PyTorch has announced it will remove.
+

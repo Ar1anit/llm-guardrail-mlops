@@ -4,8 +4,9 @@ A production-oriented open-source MLOps scaffold for detecting prompt injection 
 attempts in real time.
 
 > [!IMPORTANT]
-> This repository is currently a scaffold. It contains no classifier, trained model, API handler,
-> or data processing implementation and must not be treated as a security control.
+> This repository is currently a scaffold. It contains data-ingestion and model-training code but
+> no released classifier, trained model, API handler, or serving implementation, and must not be
+> treated as a security control.
 
 ## Goals
 
@@ -46,8 +47,9 @@ uv run mypy
 uv run pytest
 ```
 
-The placeholder test suite intentionally has no tests. Pytest exits with status 5 until
-implementation work begins; CI handles that status explicitly and rejects all other failures.
+The training tests in `tests/unit/training` run offline against a tiny local model and need the
+`training` extra. The integration and contract suites are still placeholders. CI currently
+installs only the `dev` group, so it cannot import the training dependencies.
 
 ## Data and model artifacts
 
