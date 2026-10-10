@@ -1,0 +1,101 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llm-security-guardrail-classifier"
+version = "0.1.0"
+description = "Real-time prompt injection and jailbreak classifier."
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+license = { text = "Apache-2.0" }
+authors = [
+  { name = "LLM Security Guardrail Classifier contributors" },
+]
+keywords = ["llm", "mlops", "prompt-injection", "jailbreak", "security"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Security",
+]
+dependencies = [
+  "fastapi>=0.115,<1",
+  "hydra-core>=1.3,<2",
+  "onnxruntime>=1.20,<2",
+  "pydantic>=2.10,<3",
+  "uvicorn[standard]>=0.32,<1",
+]
+
+[project.optional-dependencies]
+training = [
+  "datasets>=3,<5",
+  "optimum>=1.23,<3",
+  "scikit-learn>=1.6,<2",
+  "torch>=2.5,<3",
+  "transformers>=4.47,<6",
+]
+mlops = [
+  "dvc>=3.59,<4",
+  "dvc-s3>=3.2,<4",
+  "evidently>=0.6,<1",
+  "mlflow>=2.18,<4",
+]
+
+[dependency-groups]
+dev = [
+  "mypy>=1.13,<2",
+  "pre-commit>=4,<5",
+  "pytest>=8.3,<9",
+  "pytest-cov>=6,<7",
+  "ruff>=0.8,<1",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src", "tests"]
+extend-exclude = ["data", "mlruns", "artifacts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+docstring-code-format = true
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src", "tests"]
+exclude = ["build", "dist"]
+warn_unreachable = true
+show_error_codes = true
+pretty = true
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = ["--strict-config", "--strict-markers", "-ra"]
+markers = [
+  "integration: tests that cross process or service boundaries",
+  "contract: tests that verify external interface contracts",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["src"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 90
+

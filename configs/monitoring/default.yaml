@@ -1,0 +1,4 @@
+reference_dataset: data/processed/reference.parquet
+prediction_log: monitoring-data/predictions.parquet
+drift_report_directory: artifacts/monitoring
+

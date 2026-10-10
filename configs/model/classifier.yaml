@@ -1,0 +1,5 @@
+name: prompt-injection-classifier
+revision: null
+num_labels: 2
+max_sequence_length: 512
+

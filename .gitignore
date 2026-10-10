@@ -1,0 +1,69 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Virtual environments and local configuration
+.venv/
+venv/
+env/
+.python-version
+.env
+.env.*
+!.env.example
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Logs and temporary files
+*.log
+*.tmp
+tmp/
+
+# Experiment tracking and training logs
+mlruns/
+mlartifacts/
+lightning_logs/
+wandb/
+
+# Checkpoints and exported model artifacts
+checkpoints/
+artifacts/
+*.ckpt
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.onnx
+
+# Hugging Face and model caches
+.cache/
+.huggingface/
+huggingface/
+transformers_cache/
+
+# DVC-tracked data
+data/raw/*
+!data/raw/.gitkeep
+!data/raw/*.dvc
+data/processed/*
+!data/processed/.gitkeep
+!data/processed/*.dvc
+/dvc-cache/
+
+# Local serving and monitoring state
+.bentoml/
+monitoring-data/
+

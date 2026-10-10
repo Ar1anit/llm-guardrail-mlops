@@ -1,0 +1,6 @@
+experiment_name: guardrail-classifier
+output_directory: artifacts/training
+epochs: 3
+batch_size: 32
+learning_rate: 0.00002
+

@@ -1,0 +1,1 @@
+"""Golden dataset benchmark placeholder."""

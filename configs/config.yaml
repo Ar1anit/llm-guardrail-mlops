@@ -1,0 +1,11 @@
+defaults:
+  - model: classifier
+  - training: default
+  - serving: default
+  - monitoring: default
+  - _self_
+
+project:
+  name: llm-security-guardrail-classifier
+  random_seed: 42
+

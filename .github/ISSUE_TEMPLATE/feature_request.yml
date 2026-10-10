@@ -1,0 +1,28 @@
+name: Feature request
+description: Propose a new capability or project improvement
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user or operational problem should be solved?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed outcome
+      description: Describe the desired behavior without prescribing implementation details.
+    validations:
+      required: true
+  - type: textarea
+    id: safety
+    attributes:
+      label: Security, privacy, and model risk
+      description: Describe expected risk or state why it is not applicable.
+    validations:
+      required: true
+
