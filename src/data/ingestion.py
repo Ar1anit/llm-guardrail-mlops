@@ -15,9 +15,9 @@ import logging
 from pathlib import Path
 from typing import Literal
 
-from datasets import load_dataset
+from datasets import load_dataset  # type: ignore[import-untyped]  # datasets ships no py.typed marker
 from pydantic import BaseModel, Field, field_validator
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split  # type: ignore[import-untyped]  # no stubs
 from tqdm import tqdm
 
 logging.basicConfig(
@@ -182,7 +182,7 @@ def fetch_benign_dolly(target_count: int = 1500) -> list[PromptRecord]:
 
 def get_curated_hard_negatives() -> list[PromptRecord]:
     """Returns validated hard negative records."""
-    return [PromptRecord(**item) for item in HARD_NEGATIVES]
+    return [PromptRecord.model_validate(item) for item in HARD_NEGATIVES]
 
 
 # =====================================================================
