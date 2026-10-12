@@ -6,9 +6,8 @@ from unittest.mock import patch
 import datasets  # type: ignore[import-untyped]  # datasets ships no py.typed marker
 import pytest
 from src.data.ingestion import PromptRecord
+from src.evaluation.metrics import ID_TO_LABEL, LABEL_TO_ID
 from src.training.distilbert_pipeline import (
-    ID_TO_LABEL,
-    LABEL_TO_ID,
     MAX_TEXT_CHARACTERS,
     DistilBertTrainingConfig,
 )

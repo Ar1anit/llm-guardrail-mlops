@@ -28,9 +28,13 @@ before a model is promoted:
   class weighting or resampling would raise recall at the cost of precision.
 - **Inputs are truncated** at `max_sequence_length` (512 tokens by default). Text beyond the limit
   is invisible to the classifier in training and in serving.
-- **Release evidence** must come from the golden-dataset benchmark in `src/evaluation`, which is
-  not implemented yet. The validation metrics stored in an export's `manifest.json` are for
+- **Release evidence** must come from `GoldenEvaluator.evaluate_file` in `src/evaluation`, run on
+  the exported ONNX model. The validation metrics stored in an export's `manifest.json` are for
   development only.
+- **The golden set is too small to set thresholds on.** `data/golden_eval.jsonl` has 200 rows, of
+  which only 20 are injections and one is a hard negative, and it has no jailbreaks. One missed
+  injection moves recall by five points. It must be expanded before acceptance thresholds are
+  set; until then, golden results are provisional.
 - **No quality gate yet.** Export refuses only a model that predicts a single class on every
   validation row. It applies no recall, precision, or false-positive threshold, so a weak model
   still exports, and its weakness is visible in `manifest.json`. Regression budgets must be set

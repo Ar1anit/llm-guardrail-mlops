@@ -4,9 +4,8 @@ import datasets  # type: ignore[import-untyped]  # datasets ships no py.typed ma
 import numpy as np
 import pytest
 import torch
+from src.evaluation.metrics import ID_TO_LABEL, LABEL_TO_ID
 from src.training.distilbert_pipeline import (
-    ID_TO_LABEL,
-    LABEL_TO_ID,
     SELECTION_METRIC,
     DistilBertPipeline,
     _predict_logits,

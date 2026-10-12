@@ -44,3 +44,46 @@ packages. Follow the existing `src` package layout and use absolute imports from
 
 See [CONTRIBUTING.md](../CONTRIBUTING.md), [docs/threat-model.md](../docs/threat-model.md), and
 [docs/model-governance.md](../docs/model-governance.md) for the detailed project policies.
+
+## Explaining results and code
+
+Write explanations so that a human can review and verify the work. Use the lightest format that
+makes the point: text first, then a diagram, then an HTML page, then a video.
+
+### Writing
+
+- Write plain, controlled English, about 80% of the way to ASD-STE100 (Simplified Technical
+  English). Follow the full standard when the user asks for it.
+- Keep sentences short: 20 words or fewer for instructions, 25 or fewer for descriptions.
+- Use the active voice, simple words, and one word for one meaning.
+- Write one instruction per sentence and one topic per paragraph.
+- Simplify the sentence, not the facts. Keep exact terms, numbers, units, and caveats. When you
+  report a metric, state the dataset split, the threshold, and the positive class.
+- Separate what you ran or read from what you inferred. Name the files, configurations, and runs
+  behind each claim.
+- Apply these rules to your own explanations only. Do not rewrite existing documentation,
+  docstrings, or comments to match them unless asked.
+
+### Diagrams
+
+- Add a diagram when flow, structure, or state is easier to see than to read.
+- Write diagrams in Mermaid inside Markdown. Prefer standard notation: UML sequence, class, or
+  state diagrams for behavior and structure; flowcharts for pipelines; ER diagrams for data.
+- Keep one idea in each diagram. Label every node and edge.
+- Show planned and placeholder components differently from implemented ones, for example with a
+  "(planned)" label and `classDef planned stroke-dasharray:5 5`. A diagram must never make a
+  placeholder look like a working security control.
+
+### HTML pages and videos
+
+- Create an explainer (an HTML page or a video) only when the user asks for one.
+- Treat each explainer as discardable, not as product code. Write it to `tmp/explainers/` at the
+  repository root, which Git ignores. Do not put it in `src/` or `tests/`. Do not commit it unless
+  asked. It needs no tests. Tell the user the path.
+- Make an HTML page self-contained. Do not load remote scripts, fonts, or trackers.
+- Use synthetic examples. Do not embed real prompts, dataset or golden-set rows, model artifacts,
+  or secrets. Render prompt and model text as text, never as HTML.
+- Run extra tools in isolation with `uv run --no-project --with <package> ...`. Do not change
+  `pyproject.toml` or `uv.lock` for an explainer.
+- For narration, use a local text-to-speech tool. Use a hosted service only after explicit user
+  approval. Read its API key from an environment variable. Never print or store the key.
