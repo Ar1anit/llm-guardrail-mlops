@@ -37,6 +37,7 @@ training = [
   "optimum>=1.23,<3",
   "scikit-learn>=1.6,<2",
   "torch>=2.5,<3",
+  "tqdm>=4.66,<5",
   "transformers>=4.47,<6",
 ]
 mlops = [
@@ -53,7 +54,17 @@ dev = [
   "pytest>=8.3,<10",
   "pytest-cov>=6,<8",
   "ruff>=0.8,<1",
+  "types-tqdm>=4.66,<5",
 ]
+
+# CPU-only torch on Linux (CI): the default Linux wheel pulls several GB of CUDA libraries.
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [tool.setuptools.packages.find]
 where = ["."]
