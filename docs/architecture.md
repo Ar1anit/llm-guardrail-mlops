@@ -14,8 +14,8 @@ injection and jailbreak risk before those prompts reach a protected language mod
 4. **Serving** — a low-latency FastAPI or BentoML boundary backed by ONNX Runtime.
 5. **Monitoring** — prediction telemetry and Evidently AI drift reports.
 
-Data ingestion and the training pipeline are implemented; evaluation, serving, and monitoring are
-still placeholders. Components must be introduced through reviewed design proposals and
+Data ingestion, the training pipeline, and the golden-set evaluator are implemented; serving and
+monitoring are still placeholders. Components must be introduced through reviewed design proposals and
 accompanied by tests, model documentation, and threat analysis.
 
 ## Data flow
@@ -58,6 +58,14 @@ flowchart LR
 Serving must load the exported tokenizer and follow the manifest's `inference_contract`: the same
 maximum sequence length (longer prompts are truncated), input and output names, label mapping,
 and `argmax` decision rule.
+
+`src/evaluation/golden_evaluator.py` is that inference path. `GoldenEvaluator` runs the exported
+`model.onnx` with ONNX Runtime and needs neither torch nor transformers: `evaluate` returns a
+prompt's label and malicious probability, and `evaluate_file` scores the golden set with the
+metrics in `src/evaluation/metrics.py`, which the training pipeline also uses. Serving should call
+`evaluate` rather than reimplement inference, so golden results describe what production runs. A
+prompt is flagged when its malicious probability is strictly above the threshold; the default of
+0.5 reproduces `argmax`.
 
 ## Reliability principles
 

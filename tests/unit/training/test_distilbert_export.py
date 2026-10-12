@@ -11,8 +11,8 @@ import numpy as np
 import onnxruntime as ort  # type: ignore[import-untyped]  # onnxruntime ships no py.typed marker
 import pytest
 import torch
+from src.evaluation.metrics import ID_TO_LABEL
 from src.training.distilbert_pipeline import (
-    ID_TO_LABEL,
     SELECTION_METRIC,
     DegenerateModelError,
     DistilBertPipeline,
