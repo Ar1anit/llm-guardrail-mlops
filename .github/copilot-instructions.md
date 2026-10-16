@@ -22,7 +22,7 @@ packages. Follow the existing `src` package layout and use absolute imports from
 
 ## Python and quality
 
-- Support Python 3.11 and 3.12.
+- Support Python 3.11 through 3.14.
 - Use `uv` for environment and command execution; do not add an alternate dependency manager.
 - Format and lint with Ruff using the settings in `pyproject.toml`.
 - Keep mypy strict-compatible and preserve useful type information at public boundaries.
