@@ -47,43 +47,77 @@ See [CONTRIBUTING.md](../CONTRIBUTING.md), [docs/threat-model.md](../docs/threat
 
 ## Explaining results and code
 
-Write explanations so that a human can review and verify the work. Use the lightest format that
-makes the point: text first, then a diagram, then an HTML page, then a video.
+Optimize explanations for human understanding and oversight. Lead with the result, then explain
+what changed, why, validation evidence, limitations, and decisions that need review. Keep simple
+answers short.
+
+Choose the simplest format that makes the subject clear:
+
+- Text for concise facts, decisions, and short explanations.
+- Diagrams or charts for flows, relationships, state, and quantitative comparisons.
+- Self-contained HTML for interactive exploration, controls, or side-by-side comparisons.
+- Video for ideas that benefit from motion, a step-by-step visual story, or narration.
+
+Honor the user's requested format. These are options, not a mandatory sequence.
+For a complex flow or dense result, offer an HTML page or video once per topic and explain its
+benefit. Build one only after the user asks or accepts. Do not produce every format by default.
+
+In every format, show which parts are implemented and which are planned. Never make a placeholder
+look like a working security control.
 
 ### Writing
 
 - Write plain, controlled English, about 80% of the way to ASD-STE100 (Simplified Technical
-  English). Follow the full standard when the user asks for it.
-- Keep sentences short: 20 words or fewer for instructions, 25 or fewer for descriptions.
+  English). Treat this as a readability guide, not a formal compliance claim. Use stricter rules
+  when asked.
+- Aim for short sentences: 20 words or fewer for instructions, 25 or fewer for descriptions.
+  Preserve clarity and technical accuracy instead of forcing a word limit.
 - Use the active voice, simple words, and one word for one meaning.
-- Write one instruction per sentence and one topic per paragraph.
+- Write one instruction per sentence and one topic per paragraph. Keep a paragraph to six
+  sentences or fewer.
+- Keep articles and verbs. Do not write noun strings longer than three words.
+- Define unfamiliar terms on first use. Use a small, concrete example to explain a difficult
+  abstraction.
 - Simplify the sentence, not the facts. Keep exact terms, numbers, units, and caveats. When you
-  report a metric, state the dataset split, the threshold, and the positive class.
-- Separate what you ran or read from what you inferred. Name the files, configurations, and runs
-  behind each claim.
+  report a classifier metric, state the dataset split, the threshold, and the positive class.
+- Separate what you ran or read from inferences, assumptions, and unknowns. Link to the files,
+  configurations, runs, or sources behind your conclusions. Never invent execution or evaluation
+  results.
 - Apply these rules to your own explanations only. Do not rewrite existing documentation,
   docstrings, or comments to match them unless asked.
 
-### Diagrams
+### Diagrams and charts
 
 - Add a diagram when flow, structure, or state is easier to see than to read.
 - Write diagrams in Mermaid inside Markdown. Prefer standard notation: UML sequence, class, or
   state diagrams for behavior and structure; flowcharts for pipelines; ER diagrams for data.
-- Keep one idea in each diagram. Label every node and edge.
-- Show planned and placeholder components differently from implemented ones, for example with a
-  "(planned)" label and `classDef planned stroke-dasharray:5 5`. A diagram must never make a
-  placeholder look like a working security control.
+- Show metrics as a chart when a table is hard to scan. Examples: a confusion matrix, a
+  precision-recall curve, or bars per `attack_type`.
+- Keep one idea in each diagram or chart. Label every node, edge, and axis.
+- Include a short text takeaway so the explanation is useful without rendering the diagram or
+  chart.
+- Mark planned parts with a "(planned)" label. Use dashed styling where the diagram type supports
+  it.
 
 ### HTML pages and videos
 
-- Create an explainer (an HTML page or a video) only when the user asks for one.
 - Treat each explainer as discardable, not as product code. Write it to `tmp/explainers/` at the
-  repository root, which Git ignores. Do not put it in `src/` or `tests/`. Do not commit it unless
-  asked. It needs no tests. Tell the user the path.
-- Make an HTML page self-contained. Do not load remote scripts, fonts, or trackers.
-- Use synthetic examples. Do not embed real prompts, dataset or golden-set rows, model artifacts,
-  or secrets. Render prompt and model text as text, never as HTML.
-- Run extra tools in isolation with `uv run --no-project --with <package> ...`. Do not change
-  `pyproject.toml` or `uv.lock` for an explainer.
-- For narration, use a local text-to-speech tool. Use a hosted service only after explicit user
-  approval. Read its API key from an environment variable. Never print or store the key.
+  repository root, which Git ignores, and never to `src/` or `tests/`. Do not commit it unless
+  asked. Tell the user the path.
+- Make an HTML page self-contained: no remote scripts, fonts, or trackers. Make it interactive
+  where that helps, for example a threshold slider that updates a confusion matrix.
+- Make videos visual and step-by-step, using original diagrams and animations, for example with
+  Manim. Save the narration script next to the video as a transcript that a reviewer can check.
+- Use synthetic examples. Label synthetic metrics as illustrative, not measured performance.
+  Do not embed real prompts, dataset or golden-set rows, model artifacts, or secrets. Render
+  prompt and model text as text, never as HTML.
+- Run Python tools in isolation with `uv run --no-project --with <package> ...`. Do not change
+  `pyproject.toml` or `uv.lock` for an explainer. Ask before you install system packages (for
+  example Cairo, FFmpeg, or LaTeX) or download large files.
+- For narration, use a local text-to-speech tool, for example `say` on macOS. Use a hosted service
+  only after explicit user approval. A hosted service receives the script, so the script must hold
+  nothing sensitive. Read its API key from an environment variable. Never print or store the key.
+- Check the result before you report it. For HTML, open the page, exercise its main controls, and
+  check the browser console for errors. For video, check the rendered file, timing, and any audio
+  against the script. Keep claims and numbers consistent across formats. State any checks you
+  could not run.

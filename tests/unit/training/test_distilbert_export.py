@@ -16,6 +16,7 @@ from src.training.distilbert_pipeline import (
     SELECTION_METRIC,
     DegenerateModelError,
     DistilBertPipeline,
+    MissingEvaluationEvidenceError,
 )
 from src.training.export_onnx import ExportVerificationError
 from src.training.pipeline import ExportedArtifact
@@ -183,7 +184,20 @@ def test_manifest_keeps_metrics_for_identical_weights_in_a_copy(
     assert _read_manifest(tmp_path / "out" / "export")["validation_metrics"] is not None
 
 
-def test_manifest_omits_metrics_computed_for_different_weights(
+def test_export_refuses_a_model_that_was_never_evaluated(
+    exported_run: ExportedRun,
+    tiny_model_directory: Path,
+    tmp_path: Path,
+) -> None:
+    pipeline = build_tiny_pipeline(tmp_path, tiny_model_directory)
+
+    with pytest.raises(MissingEvaluationEvidenceError, match="exact weights"):
+        pipeline.export(exported_run.model)
+
+    assert not (tmp_path / "out").exists()
+
+
+def test_export_refuses_metrics_computed_for_different_weights(
     exported_run: ExportedRun,
     tiny_model_directory: Path,
     tmp_path: Path,
@@ -193,12 +207,13 @@ def test_manifest_omits_metrics_computed_for_different_weights(
     other_weights = copy.deepcopy(exported_run.model)
     other_weights.state_dict()["classifier.bias"].add_(1.0)
 
-    pipeline.export(other_weights)
+    with pytest.raises(MissingEvaluationEvidenceError, match="exact weights"):
+        pipeline.export(other_weights)
 
-    assert _read_manifest(tmp_path / "out" / "export")["validation_metrics"] is None
+    assert not (tmp_path / "out").exists()
 
 
-def test_manifest_omits_metrics_when_the_evaluated_model_was_mutated_afterwards(
+def test_export_refuses_a_model_changed_after_it_was_evaluated(
     exported_run: ExportedRun,
     tiny_model_directory: Path,
     tmp_path: Path,
@@ -208,9 +223,10 @@ def test_manifest_omits_metrics_when_the_evaluated_model_was_mutated_afterwards(
     pipeline.evaluate(model, exported_run.dataset)
     model.state_dict()["classifier.bias"].add_(1.0)
 
-    pipeline.export(model)
+    with pytest.raises(MissingEvaluationEvidenceError, match="exact weights"):
+        pipeline.export(model)
 
-    assert _read_manifest(tmp_path / "out" / "export")["validation_metrics"] is None
+    assert not (tmp_path / "out").exists()
 
 
 @pytest.mark.parametrize("label_id", [0, 1], ids=["all-benign", "all-malicious"])
@@ -262,6 +278,7 @@ def test_export_refuses_when_a_dataset_file_changed_after_loading(
 ) -> None:
     pipeline = build_tiny_pipeline(tmp_path, tiny_model_directory)
     pipeline.load_dataset()
+    pipeline.evaluate(exported_run.model, exported_run.dataset)
     with (tmp_path / "train.jsonl").open("a", encoding="utf-8") as stream:
         stream.write("\n")
 
@@ -346,6 +363,7 @@ def test_failed_export_leaves_no_partial_output(
 
     monkeypatch.setattr("src.training.distilbert_pipeline.verify_onnx_parity", mismatch)
     pipeline = build_tiny_pipeline(tmp_path, tiny_model_directory)
+    pipeline.evaluate(exported_run.model, exported_run.dataset)
 
     with pytest.raises(ExportVerificationError, match="simulated mismatch"):
         pipeline.export(exported_run.model)

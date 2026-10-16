@@ -81,6 +81,10 @@ class DegenerateModelError(RuntimeError):
     """The model predicts a single class on the validation split and cannot discriminate."""
 
 
+class MissingEvaluationEvidenceError(RuntimeError):
+    """``export`` was called on weights that ``evaluate`` has not scored on this pipeline."""
+
+
 @dataclass(frozen=True, slots=True)
 class DistilBertTrainingConfig:
     """DistilBERT settings; field names match the keys in ``configs/`` where one exists.
@@ -498,6 +502,8 @@ class DistilBertPipeline(
         ``flag_rate`` is the share classified malicious: recall for attack slices and the
         false-positive rate for benign ones. The golden benchmark belongs to
         ``src/evaluation``.
+
+        ``export`` refuses weights that this method has not scored.
         """
         split = dataset[VALIDATION_SPLIT]
         logits = _predict_logits(model, split, self.tokenizer, self.model_config.batch_size)
@@ -513,22 +519,23 @@ class DistilBertPipeline(
     def export(self, model: PreTrainedModel) -> ExportedArtifact:
         """Publish the ONNX model, tokenizer, and manifest as one immutable directory.
 
-        Refuses a model whose label mapping is not the benign/malicious contract, whose
-        validation predictions (when ``evaluate`` was run on these exact weights) are all one
-        class, or whose dataset files changed after loading. Files are written to a staging
-        directory, checked against PyTorch with ONNX Runtime, and only then renamed to
+        Requires evaluation evidence: ``evaluate`` must have scored these exact weights on this
+        pipeline, and the model must not have changed since. Otherwise this raises
+        ``MissingEvaluationEvidenceError`` before anything is written. It also refuses a model
+        whose label mapping is not the benign/malicious contract, whose validation predictions
+        are all one class, or whose dataset files changed after loading. Files are written to a
+        staging directory, checked against PyTorch with ONNX Runtime, and only then renamed to
         ``<output_directory>/export``. This pipeline never overwrites an existing export
         (concurrent writers to one output directory are not supported) and a failed export
         leaves nothing behind. ``manifest.json`` records the lineage, the validation metrics
-        for these exact weights if ``evaluate`` was run on them, and a SHA-256 for every other
-        file; the returned checksum is the model's. The checksums detect accidental change,
-        not tampering by someone who can rewrite the whole directory.
+        for these exact weights, and a SHA-256 for every other file; the returned checksum is
+        the model's. The checksums detect accidental change, not tampering by someone who can
+        rewrite the whole directory.
         """
         self._ensure_export_target_is_free()
         _require_binary_label_contract(model)
         validation_metrics = self._validation_metrics_for(model)
-        if validation_metrics is not None:
-            _refuse_constant_predictions(validation_metrics)
+        _refuse_constant_predictions(validation_metrics)
         dataset_digests = self._verified_dataset_digests()
 
         self.config.output_directory.mkdir(parents=True, exist_ok=True)
@@ -579,9 +586,12 @@ class DistilBertPipeline(
                 "choose a new output_directory.",
             )
 
-    def _validation_metrics_for(self, model: PreTrainedModel) -> dict[str, float] | None:
+    def _validation_metrics_for(self, model: PreTrainedModel) -> dict[str, float]:
         if self._evaluated is None or self._evaluated[0] != _state_fingerprint(model):
-            return None
+            raise MissingEvaluationEvidenceError(
+                "Export requires validation metrics for these exact weights: call evaluate() "
+                "on this model first and do not change it before export().",
+            )
         return self._evaluated[1]
 
     def _verified_dataset_digests(self) -> dict[str, str]:
@@ -601,7 +611,7 @@ class DistilBertPipeline(
     def _build_manifest(
         self,
         checksums: Mapping[str, str],
-        validation_metrics: Mapping[str, float] | None,
+        validation_metrics: Mapping[str, float],
         dataset_digests: Mapping[str, str],
     ) -> dict[str, object]:
         model_config = self.model_config
@@ -637,6 +647,6 @@ class DistilBertPipeline(
                 "tokenizer_directory": TOKENIZER_DIRECTORY_NAME,
             },
             "environment": _library_versions(),
-            "validation_metrics": dict(validation_metrics) if validation_metrics else None,
+            "validation_metrics": dict(validation_metrics),
             "files": dict(checksums),
         }
