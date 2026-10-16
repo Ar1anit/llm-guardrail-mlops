@@ -55,8 +55,9 @@ installs only the `dev` group, so it cannot import the training dependencies.
 
 ```bash
 uv run python -m src.data.ingestion --output-dir data   # Rebuild the DVC-tracked datasets
+uv run python -m src.training.train training.batch_size=8 # Train and export (Hydra overrides)
 uv run python -m src.evaluation.benchmark \
-  --export-dir artifacts/training/export --report artifacts/evaluation/report.json
+  --export-dir artifacts/training/<run>/export --report artifacts/evaluation/<run>.json
 ```
 
 The benchmark exits non-zero when a release gate in `configs/evaluation/default.yaml` fails or

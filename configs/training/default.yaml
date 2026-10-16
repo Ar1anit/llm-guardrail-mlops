@@ -1,6 +1,19 @@
 experiment_name: guardrail-classifier
-output_directory: artifacts/training
+# Each run writes to <output_root>/<UTC time>-<commit>/export.
+output_root: artifacts/training
 epochs: 3
 batch_size: 32
 learning_rate: 0.00002
-
+# false lets the trainer use a GPU (CUDA or Apple MPS); runs are reproducible only on the
+# same device and library versions.
+use_cpu: false
+# true allows uncommitted code or data that differs from its DVC pointer; the run's revisions
+# then end in "-dirty". Never release a dirty model.
+allow_dirty: false
+train_file: data/processed/train.jsonl
+validation_file: data/processed/val.jsonl
+golden_file: data/golden_eval.jsonl
+# DVC pointers that must cover every data file above; their hashes become dataset_revision.
+dvc_files:
+  - data/processed.dvc
+  - data/golden_eval.jsonl.dvc

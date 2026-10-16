@@ -67,8 +67,9 @@ Known gaps:
 - Exports are immutable only against this pipeline. Concurrent writers to one output directory,
   or someone who can replace the directory between the final check and the rename, are not
   handled.
-- `dataset_revision` is recorded but not verified against the DVC-tracked files; the manifest
-  records the SHA-256 of the files actually used.
+- `dataset_revision` is verified against the DVC pointers only when training runs through
+  `src/training/train.py`. A caller that builds `DistilBertPipeline` directly can pass any
+  string. The manifest always records the SHA-256 of the files actually used.
 - Prompts longer than `max_sequence_length` are truncated, so a payload placed after the limit is
   not seen.
 - Duplicate detection is exact on tokenized input. Paraphrases and other near-duplicates are not

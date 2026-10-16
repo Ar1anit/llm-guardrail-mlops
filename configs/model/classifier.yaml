@@ -1,5 +1,6 @@
-name: prompt-injection-classifier
-revision: null
+# Base checkpoint to fine-tune. The revision must be an immutable Hub commit SHA: a branch or
+# tag can change between runs. Changing either value changes the model and needs review.
+name: distilbert/distilbert-base-uncased
+revision: 12040accade4e8a0f71eabdb258fecc2e7e948be  # Hub commit of 2024-05-06
 num_labels: 2
 max_sequence_length: 512
-
