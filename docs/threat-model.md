@@ -52,6 +52,9 @@ Implemented in `src/data/` and `src/evaluation/`:
 - **Silent data loss and mislabelling:** ingestion counts every rejected row, raises when a label
   is missing or unknown, when a source rejects more than 5% of its rows, and when one text has
   both labels. Every source is pinned to a commit SHA.
+- **Template leakage across splits:** ingestion deduplicates on the tokenized, truncated model
+  input, so variants of one long jailbreak template that differ only after the truncation point
+  cannot land in different splits.
 - **Unmeasured attack classes:** ingestion refuses data without every attack type and stratifies
   the splits on `attack_type`, so jailbreak and injection recall are separate golden slices.
 - **Evaluating the wrong artifact:** `GoldenEvaluator.from_export` refuses an export whose files
@@ -72,8 +75,9 @@ Known gaps:
   string. The manifest always records the SHA-256 of the files actually used.
 - Prompts longer than `max_sequence_length` are truncated, so a payload placed after the limit is
   not seen.
-- Duplicate detection is exact on tokenized input. Paraphrases and other near-duplicates are not
-  detected. Ingestion requires every attack type to be present but sets no minimum count or
+- Duplicate detection is exact on the tokenized, truncated input. Paraphrases and templates that
+  differ within the first `max_sequence_length` tokens are not detected, so near-duplicate
+  jailbreak variants can still appear in more than one split. Ingestion requires every attack type to be present but sets no minimum count or
   balance.
 - The export check rejects a model that predicts one class, but there is no quality threshold.
   The benchmark gates are provisional and are not yet a required CI step (see model governance).

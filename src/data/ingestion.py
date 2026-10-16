@@ -10,8 +10,10 @@ against ``PromptRecord``, and writes deterministic splits stratified on ``attack
 
 Rows that fail the text constraints are rejected and counted, never repaired. A missing or
 unknown label, a source that rejects too many rows, a text with two labels, or a missing
-attack type raises ``IngestionError``. Errors and logs carry counts and row indices, never
-prompt text.
+attack type raises ``IngestionError``. Duplicates are found on the model input: the text as
+the training tokenizer encodes and truncates it (``configs/model/classifier.yaml``), which is
+how the training pipeline checks for leakage between splits. Errors and logs carry counts and
+row indices, never prompt text.
 """
 
 from __future__ import annotations
@@ -20,19 +22,22 @@ import argparse
 import json
 import logging
 from collections import Counter
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 from typing import Literal, get_args
 
 from datasets import load_dataset  # type: ignore[import-untyped]  # datasets ships no py.typed marker
+from omegaconf import OmegaConf
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 from sklearn.model_selection import train_test_split  # type: ignore[import-untyped]  # no stubs
+from transformers import AutoTokenizer
 
 logger = logging.getLogger(__name__)
 
 RANDOM_SEED = 42
+DEFAULT_MODEL_CONFIG = Path("configs/model/classifier.yaml")
 # A source that rejects more than this share of its rows has probably changed shape.
 MAX_REJECT_FRACTION = 0.05
 
@@ -354,25 +359,66 @@ def get_curated_hard_negatives() -> SourceBatch:
 # =====================================================================
 # 4. DEDUPLICATE, SPLIT & SAVE
 # =====================================================================
-def _dedup_key(text: str) -> str:
+@dataclass(frozen=True, slots=True)
+class TokenizerSpec:
+    """The tokenizer and truncation length that training uses, from ``configs/model``."""
+
+    name: str
+    revision: str
+    max_sequence_length: int
+
+
+def read_tokenizer_spec(path: Path) -> TokenizerSpec:
+    """Read the base model, its pinned revision, and the truncation length from a model config."""
+    raw = OmegaConf.to_container(OmegaConf.load(path), resolve=True)
+    if not isinstance(raw, dict):
+        raise IngestionError(f"{path} must be a mapping.")
+    name, revision, length = raw.get("name"), raw.get("revision"), raw.get("max_sequence_length")
+    if not isinstance(name, str) or not name:
+        raise IngestionError(f"{path}: 'name' must name the base model.")
+    if not isinstance(revision, str) or not revision:
+        raise IngestionError(f"{path}: 'revision' must pin the base model to a commit.")
+    if isinstance(length, bool) or not isinstance(length, int) or length < 1:
+        raise IngestionError(f"{path}: 'max_sequence_length' must be a positive integer.")
+    return TokenizerSpec(name, revision, length)
+
+
+def model_input_key(spec: TokenizerSpec) -> Callable[[str], Hashable]:
+    """Map a text to the token ids the model sees, encoded exactly as training encodes it."""
+    tokenizer = AutoTokenizer.from_pretrained(spec.name, revision=spec.revision)
+
+    def key(text: str) -> tuple[int, ...]:
+        encoded = tokenizer(text, truncation=True, max_length=spec.max_sequence_length)
+        return tuple(encoded["input_ids"])
+
+    return key
+
+
+def normalized_text(text: str) -> str:
+    """Case- and whitespace-insensitive text; a tokenizer-free duplicate key."""
     return " ".join(text.casefold().split())
 
 
-def deduplicate(records: Iterable[PromptRecord]) -> list[PromptRecord]:
-    """Keep the first record per text, comparing texts case- and whitespace-insensitively.
+def deduplicate(
+    records: Iterable[PromptRecord],
+    key: Callable[[str], Hashable] = normalized_text,
+) -> list[PromptRecord]:
+    """Keep the first record per ``key(text)``; the pipeline passes ``model_input_key``.
 
-    Raises ``LabelConflictError`` when a repeated text carries the other label, because no
-    order of sources makes one of the two labels correct.
+    With the model-input key, texts that differ only beyond the truncation limit are one
+    example, because the model cannot tell them apart. Raises ``LabelConflictError`` when a
+    repeated input carries the other label, because no order of sources makes one of the two
+    labels correct.
     """
-    kept: dict[str, PromptRecord] = {}
+    kept: dict[Hashable, PromptRecord] = {}
     conflicts = 0
     for record in records:
-        first = kept.setdefault(_dedup_key(record.text), record)
+        first = kept.setdefault(key(record.text), record)
         if first.label != record.label:
             conflicts += 1
     if conflicts:
         raise LabelConflictError(
-            f"{conflicts} record(s) repeat a text with the other label; "
+            f"{conflicts} record(s) repeat a model input with the other label; "
             "resolve the sources before splitting.",
         )
     return list(kept.values())
@@ -430,6 +476,8 @@ def run_pipeline(
     output_dir: Path,
     golden_size: int = 200,
     val_ratio: float = 0.15,
+    *,
+    tokenizer: TokenizerSpec,
 ) -> None:
     """Executes the full ingestion, validation, and splitting routine."""
     batches = [
@@ -441,7 +489,7 @@ def run_pipeline(
     all_records = [record for batch in batches for record in batch.records]
     logger.info("Total validated samples collected: %d", len(all_records))
 
-    records = deduplicate(all_records)
+    records = deduplicate(all_records, model_input_key(tokenizer))
     logger.info("Total records after deduplication: %d", len(records))
     golden, train, val = split_records(records, golden_size, val_ratio)
 
@@ -467,6 +515,11 @@ def run_pipeline(
             for batch in batches
         ],
         "deduplicated_rows": len(records),
+        "deduplication_tokenizer": {
+            "name": tokenizer.name,
+            "revision": tokenizer.revision,
+            "max_sequence_length": tokenizer.max_sequence_length,
+        },
         "attack_type_counts": {name: _attack_type_counts(rows) for name, rows in splits.items()},
     }
     (raw_dir / "ingestion_manifest.json").write_text(
@@ -497,13 +550,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=0.15,
         help="Share of the remaining samples used for validation (default: 0.15)",
     )
+    parser.add_argument(
+        "--model-config",
+        type=Path,
+        default=DEFAULT_MODEL_CONFIG,
+        help=f"Model config naming the tokenizer used to find duplicates "
+        f"(default: {DEFAULT_MODEL_CONFIG})",
+    )
     args = parser.parse_args(argv)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
-    run_pipeline(output_dir=args.output_dir, golden_size=args.golden_size, val_ratio=args.val_ratio)
+    run_pipeline(
+        output_dir=args.output_dir,
+        golden_size=args.golden_size,
+        val_ratio=args.val_ratio,
+        tokenizer=read_tokenizer_spec(args.model_config),
+    )
     return 0
 
 

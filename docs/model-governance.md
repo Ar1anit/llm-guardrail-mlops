@@ -34,7 +34,7 @@ before a model is promoted:
   names the model, manifest, and golden-file SHA-256. The validation metrics stored in an
   export's `manifest.json` are for development only.
 - **The golden set is still too small to calibrate thresholds on.** After the jailbreak source
-  was added, `data/golden_eval.jsonl` has 200 rows: 153 benign, 33 jailbreak, 13 injection, and
+  was added, `data/golden_eval.jsonl` has 200 rows: 154 benign, 32 jailbreak, 13 injection, and
   one hard negative. Stratifying on `attack_type` lowered the injection count from 20 to 13, so
   one missed injection moves its slice recall by almost eight points. Hard negatives cannot be
   measured. The golden set must be expanded before acceptance thresholds are calibrated.
@@ -54,8 +54,8 @@ before a model is promoted:
   appends `-dirty` to the revision. A model with a `-dirty` revision must not be released.
 - **Training device.** `use_cpu: false` lets the trainer use CUDA or Apple MPS. Results are
   reproducible only on the same device and library versions, which the manifest records.
-- **Validation coverage** is limited: the validation split has 432 rows with 29 injections,
-  72 jailbreaks, and one hard negative, so false positives on benign security-education prompts
+- **Validation coverage** is limited: the validation split has 429 rows with 29 injections,
+  69 jailbreaks, and one hard negative, so false positives on benign security-education prompts
   are barely measured.
 - **Jailbreak data** comes from one public source, `jackhhao/jailbreak-classification`, mostly
   role-play prompts from 2023. Recall on other jailbreak styles is unknown.

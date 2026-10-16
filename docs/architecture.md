@@ -42,8 +42,13 @@ flowchart LR
    `hard_negative` are 0, `injection` and `jailbreak` are 1. A row whose text is blank, too short,
    or too long is rejected and counted. A missing or unknown label, a source with no rows, or a
    source that rejects more than 5% of its rows raises `IngestionError`.
-3. **Deduplicate** on text, ignoring case and whitespace, and keep the first copy. A text that
-   arrives with both labels raises `LabelConflictError`.
+3. **Deduplicate** on the model input and keep the first copy. Texts are compared as the
+   training tokenizer encodes them, truncated to `max_sequence_length`, using the base model and
+   revision in `configs/model/classifier.yaml`. This is the same test the training pipeline
+   applies, so long templates that differ only after the truncation point count as one example.
+   An input that arrives with both labels raises `LabelConflictError`. Changing the base model or
+   `max_sequence_length` means re-running ingestion; the training leakage check reports when it
+   is needed.
 4. **Split** into the golden set (200 rows), train, and validation, stratified on `attack_type`.
    Ingestion refuses data in which any attack type has no rows, so every slice can be measured.
 5. **Record lineage** in `data/raw/ingestion_manifest.json`: source revisions and files, rows
