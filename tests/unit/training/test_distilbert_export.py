@@ -1,6 +1,7 @@
 import copy
 import hashlib
 import json
+import shutil
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -11,6 +12,8 @@ import numpy as np
 import onnxruntime as ort  # type: ignore[import-untyped]  # onnxruntime ships no py.typed marker
 import pytest
 import torch
+from src.evaluation import benchmark
+from src.evaluation.golden_evaluator import ArtifactVerificationError, GoldenEvaluator
 from src.evaluation.metrics import ID_TO_LABEL
 from src.training.distilbert_pipeline import (
     SELECTION_METRIC,
@@ -382,3 +385,53 @@ def test_run_trains_evaluates_and_exports_end_to_end(
     assert result.artifact.sha256 == _sha256(result.artifact.path)
     assert SELECTION_METRIC in result.metrics
     assert _read_manifest(tmp_path / "out" / "export")["validation_metrics"] == dict(result.metrics)
+
+
+def test_golden_evaluator_loads_the_verified_export(exported_run: ExportedRun) -> None:
+    evaluator = GoldenEvaluator.from_export(exported_run.export_directory)
+
+    result = evaluator.evaluate_file(exported_run.pipeline.model_config.golden_file)
+
+    assert result.model_sha256 == exported_run.artifact.sha256
+    assert evaluator.provenance is not None
+    assert evaluator.provenance.lineage["code_revision"] == "code-revision"
+    assert result.metrics["rows"] == 2
+
+
+def test_golden_evaluator_refuses_an_export_with_a_changed_tokenizer(
+    exported_run: ExportedRun,
+    tmp_path: Path,
+) -> None:
+    copied = tmp_path / "export"
+    shutil.copytree(exported_run.export_directory, copied)
+    vocab = next((copied / "tokenizer").glob("tokenizer*.json"))
+    vocab.write_text(vocab.read_text(encoding="utf-8") + " ", encoding="utf-8")
+
+    with pytest.raises(ArtifactVerificationError, match="mismatch"):
+        GoldenEvaluator.from_export(copied)
+
+
+def test_benchmark_reports_the_export_lineage(exported_run: ExportedRun, tmp_path: Path) -> None:
+    config = tmp_path / "gates.yaml"
+    golden = exported_run.pipeline.model_config.golden_file
+    config.write_text(
+        json.dumps({"golden_file": str(golden), "gates": {"minimums": {"rows": 2}}}),
+        encoding="utf-8",
+    )
+    report_path = tmp_path / "report.json"
+
+    exit_code = benchmark.main(
+        [
+            "--export-dir",
+            str(exported_run.export_directory),
+            "--config",
+            str(config),
+            "--report",
+            str(report_path),
+        ],
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert exit_code == benchmark.EXIT_PASSED
+    assert report["model"]["model_sha256"] == exported_run.artifact.sha256
+    assert report["golden_set"]["sha256"] == _sha256(golden)

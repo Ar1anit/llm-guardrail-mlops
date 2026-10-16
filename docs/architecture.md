@@ -14,8 +14,8 @@ injection and jailbreak risk before those prompts reach a protected language mod
 4. **Serving** — a low-latency FastAPI or BentoML boundary backed by ONNX Runtime.
 5. **Monitoring** — prediction telemetry and Evidently AI drift reports.
 
-Data ingestion, the training pipeline, and the golden-set evaluator are implemented; serving and
-monitoring are still placeholders. Components must be introduced through reviewed design proposals and
+Data ingestion, the training pipeline, the golden-set evaluator, and the release benchmark are
+implemented; serving and monitoring are still placeholders. Components must be introduced through reviewed design proposals and
 accompanied by tests, model documentation, and threat analysis.
 
 ## Data flow
@@ -29,6 +29,27 @@ flowchart LR
     E --> F[Prediction telemetry]
     F --> G[Drift monitoring]
 ```
+
+## Data ingestion
+
+`src/data/ingestion.py` (`uv run python -m src.data.ingestion`) builds the DVC-tracked datasets:
+
+1. **Fetch** three Hugging Face datasets, each pinned to a commit SHA: `deepset/prompt-injections`
+   (injection and benign), `databricks/databricks-dolly-15k` (benign), and
+   `jackhhao/jailbreak-classification` (jailbreak and benign, Apache-2.0, one pinned CSV file).
+   Ten curated hard negatives are added.
+2. **Validate** every row against `PromptRecord`. The attack type fixes the label: `benign` and
+   `hard_negative` are 0, `injection` and `jailbreak` are 1. A row whose text is blank, too short,
+   or too long is rejected and counted. A missing or unknown label, a source with no rows, or a
+   source that rejects more than 5% of its rows raises `IngestionError`.
+3. **Deduplicate** on text, ignoring case and whitespace, and keep the first copy. A text that
+   arrives with both labels raises `LabelConflictError`.
+4. **Split** into the golden set (200 rows), train, and validation, stratified on `attack_type`.
+   Ingestion refuses data in which any attack type has no rows, so every slice can be measured.
+5. **Record lineage** in `data/raw/ingestion_manifest.json`: source revisions and files, rows
+   read, rejected and kept, the seed, and attack-type counts for each split.
+
+Logs and errors contain counts and row indices, never prompt text.
 
 ## Training pipeline
 
@@ -59,13 +80,39 @@ Serving must load the exported tokenizer and follow the manifest's `inference_co
 maximum sequence length (longer prompts are truncated), input and output names, label mapping,
 and `argmax` decision rule.
 
-`src/evaluation/golden_evaluator.py` is that inference path. `GoldenEvaluator` runs the exported
-`model.onnx` with ONNX Runtime and needs neither torch nor transformers: `evaluate` returns a
-prompt's label and malicious probability, and `evaluate_file` scores the golden set with the
-metrics in `src/evaluation/metrics.py`, which the training pipeline also uses. Serving should call
-`evaluate` rather than reimplement inference, so golden results describe what production runs. A
-prompt is flagged when its malicious probability is strictly above the threshold; the default of
-0.5 reproduces `argmax`.
+`src/evaluation/golden_evaluator.py` is that inference path. Build it with
+`GoldenEvaluator.from_export(<export directory>)`. This fails closed with
+`ArtifactVerificationError` unless:
+
+- the directory holds exactly the files that `manifest.json` lists, with no symlinks;
+- every file matches its recorded SHA-256;
+- the `inference_contract` has the expected input and output names, label mapping, and a
+  supported decision rule;
+- the ONNX graph exposes that interface.
+
+The tokenizer, maximum sequence length, and threshold come from the manifest, not from the
+caller. The model is hashed and loaded from the same bytes. The module imports neither torch nor
+transformers; only the default tokenizer loader imports transformers, when it runs. `evaluate`
+returns a prompt's label and malicious probability. `evaluate_file` returns a `GoldenResult`:
+the metrics from `src/evaluation/metrics.py` (shared with training), plus the SHA-256 of the
+model and of the golden file that produced them. Serving should call `evaluate` rather than
+reimplement inference, so golden results describe what production runs. A prompt is flagged when
+its malicious probability is strictly above the threshold; `argmax` maps to 0.5.
+
+## Release benchmark
+
+`uv run python -m src.evaluation.benchmark --export-dir <dir> --report <file>` loads the export
+with `from_export`, scores the golden set, and compares the metrics with the gates in
+`configs/evaluation/default.yaml`. It writes a JSON report with the model and manifest SHA-256,
+the manifest lineage and inference contract, the golden-file path and SHA-256, every metric, and
+each gate's threshold, actual value, and result. An existing report is never overwritten.
+
+| Exit code | Meaning                                                              | Report written |
+| --------- | -------------------------------------------------------------------- | -------------- |
+| 0         | Every gate passed.                                                   | Yes            |
+| 3         | At least one gate failed. A gate on a missing metric fails.          | Yes            |
+| 2         | The export, golden file, or configuration could not be verified.     | No             |
+| 1         | Unexpected crash.                                                    | No             |
 
 ## Reliability principles
 

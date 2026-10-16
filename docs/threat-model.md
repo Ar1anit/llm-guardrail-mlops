@@ -47,6 +47,18 @@ Implemented in `src/training/`:
 - **Sensitive data exposure:** validation errors never include prompt text, and no experiment
   tracker is enabled.
 
+Implemented in `src/data/` and `src/evaluation/`:
+
+- **Silent data loss and mislabelling:** ingestion counts every rejected row, raises when a label
+  is missing or unknown, when a source rejects more than 5% of its rows, and when one text has
+  both labels. Every source is pinned to a commit SHA.
+- **Unmeasured attack classes:** ingestion refuses data without every attack type and stratifies
+  the splits on `attack_type`, so jailbreak and injection recall are separate golden slices.
+- **Evaluating the wrong artifact:** `GoldenEvaluator.from_export` refuses an export whose files
+  differ from its manifest or whose inference contract it cannot honour. The benchmark report
+  binds every metric to the model, manifest, and golden-file SHA-256 and exits non-zero when a
+  gate fails.
+
 Known gaps:
 
 - The manifest checksums detect accidental change but are not signatures: anyone who can write the
@@ -60,8 +72,11 @@ Known gaps:
 - Prompts longer than `max_sequence_length` are truncated, so a payload placed after the limit is
   not seen.
 - Duplicate detection is exact on tokenized input. Paraphrases and other near-duplicates are not
-  detected, and there are no minimum class, attack-type, or balance requirements.
-- The export check rejects a model that predicts one class, but there is no quality threshold:
-  deciding whether a model is good enough is a release decision (see model governance).
+  detected. Ingestion requires every attack type to be present but sets no minimum count or
+  balance.
+- The export check rejects a model that predicts one class, but there is no quality threshold.
+  The benchmark gates are provisional and are not yet a required CI step (see model governance).
+- The benchmark verifies tokenizer files and then loads them, so someone who can write the export
+  directory between those two steps can swap them. The model file has no such gap.
 - The ONNX export uses PyTorch's legacy exporter, which PyTorch has announced it will remove.
 

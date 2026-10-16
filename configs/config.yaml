@@ -3,6 +3,7 @@ defaults:
   - training: default
   - serving: default
   - monitoring: default
+  - evaluation: default
   - _self_
 
 project:

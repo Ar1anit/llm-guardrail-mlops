@@ -51,6 +51,18 @@ The training tests in `tests/unit/training` run offline against a tiny local mod
 `training` extra. The integration and contract suites are still placeholders. CI currently
 installs only the `dev` group, so it cannot import the training dependencies.
 
+## Data, training, and evaluation commands
+
+```bash
+uv run python -m src.data.ingestion --output-dir data   # Rebuild the DVC-tracked datasets
+uv run python -m src.evaluation.benchmark \
+  --export-dir artifacts/training/export --report artifacts/evaluation/report.json
+```
+
+The benchmark exits non-zero when a release gate in `configs/evaluation/default.yaml` fails or
+the export does not match its manifest. The gates are provisional; see
+[model governance](docs/model-governance.md).
+
 ## Data and model artifacts
 
 Datasets under `data/raw/` and `data/processed/` are intended to be tracked with DVC rather than
