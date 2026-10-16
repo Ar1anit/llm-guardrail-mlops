@@ -74,7 +74,8 @@ include = ["src*"]
 target-version = "py311"
 line-length = 100
 src = ["src", "tests"]
-extend-exclude = ["data", "mlruns", "artifacts"]
+# "./" anchors each pattern to the project root; a bare "data" would also skip src/data.
+extend-exclude = ["./data", "./mlruns", "./artifacts"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
