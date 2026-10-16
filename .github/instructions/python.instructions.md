@@ -6,7 +6,7 @@ applyTo: ["src/**/*.py", "tests/**/*.py"]
 
 # Python implementation rules
 
-- Target Python 3.11 syntax and keep compatibility with Python 3.12.
+- Target Python 3.11 syntax and keep compatibility with Python 3.12, 3.13, and 3.14.
 - Use absolute imports from the `src` package and keep imports Ruff-compatible.
 - Add precise type annotations to functions, methods, module-level data, and public interfaces.
 - Preserve strict mypy compatibility; avoid `Any`, broad casts, and type-ignore comments unless the

@@ -30,7 +30,7 @@ attempts in real time.
 
 ## Development environment
 
-Python 3.11 and 3.12 are supported. Install
+Python 3.11 through 3.14 are supported; 3.14 is recommended for local work. Install
 [uv](https://docs.astral.sh/uv/) and synchronize the complete environment:
 
 ```bash
