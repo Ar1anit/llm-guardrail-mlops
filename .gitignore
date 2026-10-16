@@ -61,6 +61,7 @@ data/raw/*
 data/processed/*
 !data/processed/.gitkeep
 !data/processed/*.dvc
+data/golden_eval.jsonl
 /dvc-cache/
 
 # Local serving and monitoring state
