@@ -45,8 +45,15 @@ before a model is promoted:
   Changing a gate needs reviewer approval. Export itself still refuses only a model that
   predicts one class for every validation row.
 - **Base model pinning.** `base_model_revision` must be a commit SHA; a branch, tag, or missing
-  revision is rejected because it can change between runs. The shipped `configs/model/classifier.yaml`
-  sets `revision: null` and must be updated before the pipeline is wired to Hydra.
+  revision is rejected because it can change between runs. `configs/model/classifier.yaml` pins
+  `distilbert/distilbert-base-uncased` to commit `12040accade4e8a0f71eabdb258fecc2e7e948be`
+  (2024-05-06). Changing the base model or its revision needs review.
+- **Run provenance.** `src/training/train.py` records the git commit as `code_revision` and the
+  verified DVC hashes as `dataset_revision`. It refuses a dirty working tree, or data that
+  differs from its DVC pointers. `training.allow_dirty=true` overrides this for experiments and
+  appends `-dirty` to the revision. A model with a `-dirty` revision must not be released.
+- **Training device.** `use_cpu: false` lets the trainer use CUDA or Apple MPS. Results are
+  reproducible only on the same device and library versions, which the manifest records.
 - **Validation coverage** is limited: the validation split has 432 rows with 29 injections,
   72 jailbreaks, and one hard negative, so false positives on benign security-education prompts
   are barely measured.

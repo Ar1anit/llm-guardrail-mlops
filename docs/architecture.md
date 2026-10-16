@@ -53,6 +53,20 @@ Logs and errors contain counts and row indices, never prompt text.
 
 ## Training pipeline
 
+Run training from the repository root with
+`uv run python -m src.training.train [overrides...]`, for example `training.batch_size=8`. The
+entry point composes `configs/config.yaml` with Hydra and validates the `model` and `training`
+sections: unknown keys, wrong types, and a missing base-model revision raise. It then records
+provenance (`src/training/provenance.py`):
+
+- `code_revision` is the git `HEAD` commit. Uncommitted or untracked changes stop the run.
+- `dataset_revision` lists each DVC pointer in `training.dvc_files` with the hash of the data on
+  disk, computed the way DVC computes it. Data that differs from its pointer stops the run, and
+  every train, validation, and golden file must lie inside a pointer's output.
+- `training.allow_dirty=true` lets both checks pass and appends `-dirty` to the revision.
+
+Each run writes to a new directory, `<training.output_root>/<UTC time>-<commit>/export`.
+
 `DistilBertPipeline` in `src/training/distilbert_pipeline.py` implements the stages of the generic
 `TrainingPipeline` in `src/training/pipeline.py`:
 

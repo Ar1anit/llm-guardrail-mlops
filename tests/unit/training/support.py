@@ -1,6 +1,7 @@
 """Helpers shared by the training unit tests."""
 
 import json
+import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -223,3 +224,37 @@ def valid_splits(
             ),
         },
     )
+
+
+def git(repository: Path, *arguments: str) -> str:
+    return subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=test",
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            *arguments,
+        ],
+        cwd=repository,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+
+def init_repository(repository: Path) -> str:
+    """Commit everything in ``repository`` and return the commit SHA."""
+    repository.mkdir(parents=True, exist_ok=True)
+    git(repository, "init", "-q")
+    (repository / "README.md").write_text("fixture\n", encoding="utf-8")
+    git(repository, "add", "-A")
+    git(repository, "commit", "-q", "-m", "fixture")
+    return git(repository, "rev-parse", "HEAD")
+
+
+def write_dvc_pointer(dvc_file: Path, output: str, md5: str) -> Path:
+    dvc_file.write_text(f"outs:\n- md5: {md5}\n  hash: md5\n  path: {output}\n", encoding="utf-8")
+    return dvc_file
