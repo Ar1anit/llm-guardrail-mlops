@@ -29,6 +29,32 @@ The project does not yet define a default allow, block, or escalation policy. A 
 release must document fail-open versus fail-closed behavior, uncertainty handling, threshold
 ownership, and human-review procedures.
 
+The only serving mode today is **shadow**: every verdict carries `"action": "log_only"`, so no
+request outcome depends on the model, and an outage or wrong verdict cannot block a user. This
+is fail-open by construction and is acceptable only because nothing is enforced.
+
+## Serving boundary controls and gaps
+
+Implemented in `src/serving/`:
+
+- **Model substitution:** the service starts only with an export that verifies against its
+  manifest and matches the `model_sha256` in `release.json`. The image holds one model version.
+- **Unauthorized use:** classification and model routes need a bearer token of at least 32
+  characters, compared in constant time. Disabling authentication is an explicit setting.
+- **Prompt leakage:** logs and error responses never contain prompt text; validation errors do
+  not echo the request body; API documentation routes are disabled.
+- **Resource abuse:** prompts are limited to 10,000 characters.
+- **Telemetry:** ONNX Runtime telemetry events are disabled before a model is loaded.
+
+Known gaps:
+
+- One shared static token; no per-caller identity, rotation, or rate limiting yet.
+- ONNX Runtime initializes its telemetry provider when it is imported, before it can be
+  disabled. Whether that step makes a network call has not been verified; restrict outbound
+  traffic from the serving environment.
+- Shadow verdicts are only logged as metadata. Collecting prompts for evaluation needs an
+  approved redaction and retention policy first.
+
 ## Training pipeline controls and gaps
 
 Implemented in `src/training/`:

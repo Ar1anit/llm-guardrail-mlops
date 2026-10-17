@@ -268,6 +268,8 @@ class GoldenEvaluator:
         self._tokenizer = tokenizer
         self._max_sequence_length = max_sequence_length
         self._threshold = threshold
+        # Prompts are sensitive; no usage telemetry leaves the process that scores them.
+        ort.disable_telemetry_events()
         self._session = ort.InferenceSession(model_bytes, providers=["CPUExecutionProvider"])
         input_names = tuple(node.name for node in self._session.get_inputs())
         output_names = [node.name for node in self._session.get_outputs()]

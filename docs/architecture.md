@@ -11,12 +11,13 @@ injection and jailbreak risk before those prompts reach a protected language mod
 2. **Training** — a reproducible DistilBERT fine-tuning pipeline that exports a checksummed ONNX
    artifact; MLflow experiment tracking is planned.
 3. **Evaluation** — golden-dataset benchmarks and release acceptance criteria.
-4. **Serving** — a low-latency FastAPI or BentoML boundary backed by ONNX Runtime.
+4. **Serving** — a FastAPI service backed by ONNX Runtime, in shadow mode.
 5. **Monitoring** — prediction telemetry and Evidently AI drift reports.
 
-Data ingestion, the training pipeline, the golden-set evaluator, the release benchmark, and
-model versioning are implemented; serving and monitoring are still placeholders. Components must be introduced through reviewed design proposals and
-accompanied by tests, model documentation, and threat analysis.
+Data ingestion, the training pipeline, the golden-set evaluator, the release benchmark, model
+versioning, and shadow-mode serving are implemented; cloud deployment and monitoring are not
+yet. Components must be introduced through reviewed design proposals and accompanied by tests,
+model documentation, and threat analysis.
 
 ## Data flow
 
@@ -163,6 +164,46 @@ Versions are therefore created with `create_model_version`, and a deployment is 
 registered model, `deployment.<name> = <version>`. `promote` moves that tag; versions are never
 changed. A missing tracking URI is an error, so a release never lands in a local `./mlruns`
 store by accident.
+
+## Serving (shadow mode)
+
+`src/serving/api.py` serves one verified model version. Shadow mode means the service scores
+prompts and returns a verdict with `"action": "log_only"`; callers must not block on it. No
+enforcing mode exists yet.
+
+**Building an image.** One image holds exactly one model version:
+
+```bash
+uv run python -m src.registry.fetch --deployment shadow --output models/shadow
+docker build -t guardrail-classifier:<release> .
+```
+
+`fetch` resolves the `deployment.shadow` tag, downloads that version's export, verifies it
+against its manifest and its `model_sha256` tag, and writes `models/shadow/release.json`. The
+image contains the locked runtime dependencies (no torch), runs as a non-root user, works on a
+read-only file system, and sets the Hugging Face offline flags. Promoting a release therefore
+means fetching and building a new image.
+
+**Starting.** `python -m src.serving.api [key=value ...]` reads `configs/serving/default.yaml`.
+It refuses to start, with exit code 2, when:
+
+- the mode is not `shadow`;
+- `require_auth` is true and `GUARDRAIL_API_TOKEN` is shorter than 32 characters;
+- the export fails verification, or is not the model `release.json` names.
+
+**Routes.**
+
+| Route | Authentication | Purpose |
+| --- | --- | --- |
+| `POST /v1/classify` | Bearer token | Score `{"prompt": "..."}`; returns label, score, threshold, mode, action, model release, and request id. |
+| `GET /v1/model` | Bearer token | Release, registry version, checksum, and lineage of the loaded model. |
+| `GET /healthz`, `GET /readyz` | None | Liveness and readiness. The model is verified before the app exists. |
+
+Prompts longer than `max_prompt_characters` (10,000) get `413`. Blank prompts and unknown fields
+get `422`, and validation errors never echo the request body. A model error gets a generic
+`500`. Logs carry the request id, prompt length, label, score, and latency, never prompt text.
+The API documentation routes are disabled. Inference is serialized with a lock, because fast
+tokenizers are not safe across threads.
 
 ## Reliability principles
 

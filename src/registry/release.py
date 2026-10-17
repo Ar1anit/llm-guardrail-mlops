@@ -254,7 +254,7 @@ def promote(
     return version
 
 
-def _tracking_uri(explicit: str | None) -> str:
+def tracking_uri(explicit: str | None) -> str:
     uri = explicit or os.environ.get("MLFLOW_TRACKING_URI")
     if not uri:
         raise ReleaseError(
@@ -288,7 +288,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         settings = load_settings(args.config)
-        mlflow.set_tracking_uri(_tracking_uri(args.tracking_uri))
+        mlflow.set_tracking_uri(tracking_uri(args.tracking_uri))
         mlflow.set_registry_uri(mlflow.get_tracking_uri())
         client = MlflowClient()
         if args.command == "publish":
