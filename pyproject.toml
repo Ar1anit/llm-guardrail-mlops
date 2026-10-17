@@ -44,6 +44,7 @@ training = [
 ]
 mlops = [
   "dvc>=3.59,<4",
+  "dvc-azure>=3.1,<4",
   "dvc-s3>=3.2,<4",
   "evidently>=0.6,<1",
   "mlflow>=2.18,<4",
