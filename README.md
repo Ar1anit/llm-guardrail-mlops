@@ -83,6 +83,9 @@ docker run -p 127.0.0.1:8000:8000 -e GUARDRAIL_API_TOKEN=<random 32+ characters>
 `POST /v1/classify` with `Authorization: Bearer <token>` and `{"prompt": "..."}` returns a
 verdict with `"action": "log_only"`. See [architecture](docs/architecture.md#serving-shadow-mode).
 
+Each published release also deploys automatically to the shadow Container App on Azure; see
+[deploying](docs/architecture.md#deploying-azure-container-apps).
+
 ## Data and model artifacts
 
 Datasets under `data/raw/` and `data/processed/` are intended to be tracked with DVC rather than

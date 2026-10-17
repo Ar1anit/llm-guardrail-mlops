@@ -74,6 +74,10 @@ before a model is promoted:
   report, `release.json`, `manifest.json`, and checksums. Weights are never public, because a
   public copy lets an attacker search offline for prompts the guardrail misses. The release
   workflow fails if the image package is not private.
+- **Deployment.** Every published release deploys to the `production-shadow` Container App
+  automatically, after its build provenance is verified. This is acceptable only because shadow
+  mode cannot block a request. Any enforcing deployment must be a separate, manually approved
+  step.
 - **Immutability.** Registered versions are never edited. A second copy of each export also
   sits in the `models` Blob container under a 365-day retention policy.
 

@@ -46,9 +46,25 @@ Implemented in `src/serving/`:
 - **Resource abuse:** prompts are limited to 10,000 characters.
 - **Telemetry:** ONNX Runtime telemetry events are disabled before a model is loaded.
 
+Implemented in `infra/azure/serving.bicep` and `.github/workflows/deploy.yml`:
+
+- **Image substitution in deployment:** the deploy workflow refuses an image unless its build
+  provenance shows this repository's `release.yml` built it, deploys only by digest, and checks
+  that the live service reports the release's model checksum.
+- **Credential exposure:** GitHub Actions signs in to Azure through OIDC; the release and deploy
+  identities are separate, each trusted by one GitHub environment, with access to one resource
+  group or workspace. The app pulls with a managed identity that has only `AcrPull`. The API
+  token lives only in the Container App's secret store.
+
 Known gaps:
 
+- The endpoint is reachable from the internet; only the bearer token protects it, unless the
+  source-IP allowlist is set.
 - One shared static token; no per-caller identity, rotation, or rate limiting yet.
+- The deploy identity has Contributor on the serving resource group, which is broader than
+  rolling out an image needs. A custom role would narrow it.
+- Every successful release deploys to shadow automatically. That is acceptable only because
+  shadow mode cannot change a request outcome.
 - ONNX Runtime initializes its telemetry provider when it is imported, before it can be
   disabled. Whether that step makes a network call has not been verified; restrict outbound
   traffic from the serving environment.
