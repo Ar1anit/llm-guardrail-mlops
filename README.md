@@ -66,12 +66,15 @@ the export does not match its manifest. The gates are provisional; see
 
 Benchmarked exports are released to the MLflow model registry with
 `python -m src.registry.release` (see [architecture](docs/architecture.md#model-versioning)).
+Pushing a tag `model-v<version>` then publishes a private GHCR image and a GitHub Release with
+the model card and checksums (see
+[publishing a release](docs/architecture.md#publishing-a-release-on-github)).
 Release 0.1.0 is for [shadow mode only](docs/model-cards/guardrail-classifier-0.1.0.md).
 
 ## Serving (shadow mode)
 
 ```bash
-uv run python -m src.registry.fetch --deployment shadow --output models/shadow
+uv run python -m src.registry.fetch --release <release> --output models/serving
 docker build -t guardrail-classifier:0.1.0 .
 docker run -p 127.0.0.1:8000:8000 -e GUARDRAIL_API_TOKEN=<random 32+ characters> \
   --read-only --tmpfs /tmp guardrail-classifier:0.1.0

@@ -45,7 +45,7 @@ RELEASE_FILE_NAME = "release.json"
 EXPORT_DIRECTORY_NAME = "export"
 RELEASE_FIELDS = (
     "model_name",
-    "deployment",
+    "selector",
     "registry_version",
     "release",
     "model_sha256",

@@ -1,0 +1,174 @@
+name: Model release
+
+# Push a tag model-vMAJOR.MINOR.PATCH on a commit of main to publish that registry release:
+# a private GHCR image holding exactly that model version, with build provenance, and a public
+# GitHub Release carrying the model card, benchmark report, and checksums (never the weights).
+
+on:
+  push:
+    tags:
+      - "model-v*.*.*"
+
+permissions: {}
+
+concurrency:
+  group: model-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Publish ${{ github.ref_name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Azure trusts only this environment (federated credential subject), and the environment
+    # accepts only model-v* tags.
+    environment: model-release
+    permissions:
+      contents: write # Create the GitHub Release.
+      packages: write # Push the image to GHCR.
+      id-token: write # Azure OIDC sign-in and the build attestation.
+      attestations: write # Store the build provenance attestation.
+    steps:
+      - name: Check out the tagged commit
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Validate the tag
+        id: tag
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#model-v}"
+          if [[ ! "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME is not model-vMAJOR.MINOR.PATCH."
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::The tagged commit is not on main."
+            exit 1
+          fi
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          {
+            echo "version=$version"
+            echo "owner=$owner"
+            echo "image=ghcr.io/$owner/guardrail-classifier"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.9.28"
+          enable-cache: true
+          python-version: "3.14"
+
+      - name: Install dependencies
+        run: uv sync --locked --extra serving --extra mlops
+
+      - name: Sign in to Azure (OIDC, no stored secret)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Fetch and verify the release from the model registry
+        env:
+          MLFLOW_TRACKING_URI: ${{ vars.MLFLOW_TRACKING_URI }}
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: >-
+          uv run python -m src.registry.fetch --release "$VERSION"
+          --output models/serving --evidence release-evidence
+
+      - name: Read the model identity
+        id: model
+        run: |
+          {
+            echo "sha256=$(jq -r .model_sha256 models/serving/release.json)"
+            echo "registry_version=$(jq -r .registry_version models/serving/release.json)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Sign in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push the serving image
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          # One plain image manifest; provenance is attested by the next step instead.
+          provenance: false
+          sbom: false
+          tags: ${{ steps.tag.outputs.image }}:${{ steps.tag.outputs.version }}
+          labels: |
+            org.opencontainers.image.title=guardrail-classifier
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.tag.outputs.version }}
+            org.opencontainers.image.description=Shadow-mode prompt-injection and jailbreak classifier
+            io.github.llm-guardrail.model.sha256=${{ steps.model.outputs.sha256 }}
+            io.github.llm-guardrail.model.registry-version=${{ steps.model.outputs.registry_version }}
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ${{ steps.tag.outputs.image }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Require the image to stay private
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWNER: ${{ steps.tag.outputs.owner }}
+        run: |
+          visibility="$(gh api "/users/$OWNER/packages/container/guardrail-classifier" --jq .visibility)"
+          if [[ "$visibility" != "private" ]]; then
+            echo "::error::The GHCR package is $visibility; the image contains the model weights."
+            exit 1
+          fi
+
+      - name: Assemble release notes and assets
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+          IMAGE: ${{ steps.tag.outputs.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir release-assets
+          cp release-evidence/docs/*.md release-assets/model-card.md
+          cp release-evidence/evaluation/*.json release-assets/benchmark-report.json
+          cp models/serving/release.json release-assets/release.json
+          cp models/serving/export/manifest.json release-assets/manifest.json
+          (cd release-assets && sha256sum -- * > SHA256SUMS)
+          {
+            echo "Container image (private): \`$IMAGE:$VERSION@$DIGEST\`"
+            echo
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            jq -r 'to_entries[] | "| \(.key) | `\(.value)` |"' models/serving/release.json
+            echo
+            echo "The model weights are not attached: a public copy would let anyone search"
+            echo "offline for prompts the guardrail misses. Verify the image provenance with"
+            echo "\`gh attestation verify oci://$IMAGE@$DIGEST --repo $GITHUB_REPOSITORY\`."
+            echo
+            echo "---"
+            echo
+            cat release-assets/model-card.md
+          } > release-notes.md
+
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME" release-assets/*
+          --title "guardrail-classifier $VERSION"
+          --notes-file release-notes.md
+          --verify-tag

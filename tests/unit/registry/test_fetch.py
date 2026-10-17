@@ -12,8 +12,21 @@ from tests.unit.evaluation.support import sha256
 from tests.unit.registry.support import SETTINGS, load_evaluator, make_candidate
 
 
-def _fetch(client: MlflowClient, output: Path, deployment: str = "shadow") -> dict[str, str]:
-    fetch(client, SETTINGS, deployment, output, load_evaluator=load_evaluator)
+def _fetch(
+    client: MlflowClient,
+    output: Path,
+    *,
+    release: str | None = None,
+) -> dict[str, str]:
+    """Fetch by ``release`` when given, otherwise through the ``shadow`` deployment."""
+    fetch(
+        client,
+        SETTINGS,
+        output,
+        deployment=None if release else "shadow",
+        release=release,
+        load_evaluator=load_evaluator,
+    )
     release = json.loads((output / RELEASE_FILE_NAME).read_text(encoding="utf-8"))
     assert isinstance(release, dict)
     return release
@@ -32,7 +45,7 @@ def test_fetch_writes_the_verified_export_and_its_release_record(
     assert sha256(output / "export" / "model.onnx") == sha256(release_files[0] / "model.onnx")
     assert release == {
         "model_name": SETTINGS.model_name,
-        "deployment": "shadow",
+        "selector": "deployment=shadow",
         "registry_version": version,
         "release": "0.1.0",
         "model_sha256": sha256(release_files[0] / "model.onnx"),
@@ -86,4 +99,65 @@ def test_cli_refuses_to_run_without_a_tracking_uri(
 ) -> None:
     monkeypatch.delenv("MLFLOW_TRACKING_URI", raising=False)
 
-    assert main(["--deployment", "shadow", "--output", str(tmp_path / "out")]) == 2
+    assert main(["--release", "0.1.0", "--output", str(tmp_path / "out")]) == 2
+
+
+def test_fetch_by_release_number_and_download_its_evidence(
+    registry: MlflowClient,
+    release_files: tuple[Path, Path, Path],
+    tmp_path: Path,
+) -> None:
+    publish(registry, SETTINGS, make_candidate(release_files))
+    evidence = tmp_path / "evidence"
+
+    info = fetch(
+        registry,
+        SETTINGS,
+        tmp_path / "serving",
+        release="0.1.0",
+        evidence=evidence,
+        load_evaluator=load_evaluator,
+    )
+
+    assert info.selector == "release=0.1.0"
+    assert (evidence / "evaluation" / "report.json").read_bytes() == release_files[1].read_bytes()
+    assert (evidence / "docs" / "card.md").read_bytes() == release_files[2].read_bytes()
+
+
+def test_fetch_refuses_an_unknown_release(
+    registry: MlflowClient,
+    release_files: tuple[Path, Path, Path],
+    tmp_path: Path,
+) -> None:
+    publish(registry, SETTINGS, make_candidate(release_files))
+
+    with pytest.raises(ReleaseError, match=r"Release 9\.9\.9"):
+        _fetch(registry, tmp_path / "out", release="9.9.9")
+
+
+def test_fetch_requires_exactly_one_selector(registry: MlflowClient, tmp_path: Path) -> None:
+    with pytest.raises(ReleaseError, match="exactly one"):
+        fetch(registry, SETTINGS, tmp_path / "out", deployment="shadow", release="0.1.0")
+    with pytest.raises(ReleaseError, match="exactly one"):
+        fetch(registry, SETTINGS, tmp_path / "out")
+
+
+def test_failed_fetch_also_removes_the_evidence_directory(
+    registry: MlflowClient,
+    release_files: tuple[Path, Path, Path],
+    tmp_path: Path,
+) -> None:
+    version = publish(registry, SETTINGS, make_candidate(release_files))
+    registry.set_model_version_tag(SETTINGS.model_name, version, "model_sha256", "0" * 64)
+
+    with pytest.raises(ReleaseError, match="model_sha256"):
+        fetch(
+            registry,
+            SETTINGS,
+            tmp_path / "out" / "serving",
+            release="0.1.0",
+            evidence=tmp_path / "out" / "evidence",
+            load_evaluator=load_evaluator,
+        )
+
+    assert list((tmp_path / "out").iterdir()) == []

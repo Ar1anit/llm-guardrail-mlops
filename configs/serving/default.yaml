@@ -1,8 +1,8 @@
 # Settings for `python -m src.serving.api`; override any key with key=value arguments.
 host: 0.0.0.0
 port: 8000
-# Written by `python -m src.registry.fetch --deployment shadow --output models/shadow`.
-model_directory: models/shadow
+# Written by `python -m src.registry.fetch --release 0.1.0 --output models/serving`.
+model_directory: models/serving
 # Only "shadow" is supported: verdicts are returned with action "log_only" and must not block.
 mode: shadow
 # Matches the PromptRecord text limit used for training data.

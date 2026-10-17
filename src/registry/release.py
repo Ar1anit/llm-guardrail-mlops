@@ -166,7 +166,7 @@ def _ensure_registered_model(client: MlflowClient, name: str) -> None:
         )
 
 
-def _find_version(client: MlflowClient, name: str, tag: str, value: str) -> str | None:
+def find_version(client: MlflowClient, name: str, tag: str, value: str) -> str | None:
     found = client.search_model_versions(
         f"name={_quoted(name)} and tags.{tag}={_quoted(value)}",
     )
@@ -184,9 +184,9 @@ def publish(
     name = settings.model_name
     if deployment is not None:
         _check_deployment_name(deployment)
-    if _find_version(client, name, "release", candidate.version) is not None:
+    if find_version(client, name, "release", candidate.version) is not None:
         raise ReleaseError(f"Release {candidate.version} of {name} already exists.")
-    existing = _find_version(client, name, "model_sha256", candidate.model_sha256)
+    existing = find_version(client, name, "model_sha256", candidate.model_sha256)
     if existing is not None:
         raise ReleaseError(f"This model.onnx is already registered as version {existing}.")
     _ensure_registered_model(client, name)
@@ -238,7 +238,7 @@ def promote(
 ) -> str:
     """Point ``deployment`` at the model version of ``release`` and return that version."""
     _check_deployment_name(deployment)
-    version = _find_version(client, settings.model_name, "release", release)
+    version = find_version(client, settings.model_name, "release", release)
     if version is None:
         raise ReleaseError(f"Release {release} of {settings.model_name} does not exist.")
     tag = f"{DEPLOYMENT_TAG_PREFIX}{deployment}"

@@ -69,6 +69,11 @@ before a model is promoted:
   pointer is a promotion or rollback and needs the same review as the first release. Moving
   `shadow` does not change request outcomes; any enforcing deployment needs calibrated
   thresholds and a documented fail-open or fail-closed decision first.
+- **Publication.** A `model-v<version>` tag publishes the release: a private GHCR image with a
+  build-provenance attestation, and a public GitHub Release with the model card, benchmark
+  report, `release.json`, `manifest.json`, and checksums. Weights are never public, because a
+  public copy lets an attacker search offline for prompts the guardrail misses. The release
+  workflow fails if the image package is not private.
 - **Immutability.** Registered versions are never edited. A second copy of each export also
   sits in the `models` Blob container under a 365-day retention policy.
 
