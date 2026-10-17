@@ -1,0 +1,5 @@
+# MLflow model registry settings for `python -m src.registry.release`.
+# The tracking URI is not stored here: set MLFLOW_TRACKING_URI (the Azure ML workspace's
+# `mlflowTrackingUri`, an output of infra/azure/mlflow-registry.bicep).
+model_name: guardrail-classifier
+experiment_name: guardrail-releases

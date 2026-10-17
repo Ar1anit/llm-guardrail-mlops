@@ -12,9 +12,11 @@ import numpy as np
 import onnxruntime as ort  # type: ignore[import-untyped]  # onnxruntime ships no py.typed marker
 import pytest
 import torch
+from mlflow import MlflowClient
 from src.evaluation import benchmark
 from src.evaluation.golden_evaluator import ArtifactVerificationError, GoldenEvaluator
 from src.evaluation.metrics import ID_TO_LABEL
+from src.registry import release
 from src.training.distilbert_pipeline import (
     SELECTION_METRIC,
     DegenerateModelError,
@@ -435,3 +437,55 @@ def test_benchmark_reports_the_export_lineage(exported_run: ExportedRun, tmp_pat
     assert exit_code == benchmark.EXIT_PASSED
     assert report["model"]["model_sha256"] == exported_run.artifact.sha256
     assert report["golden_set"]["sha256"] == _sha256(golden)
+
+
+def test_benchmarked_export_publishes_to_the_registry(
+    exported_run: ExportedRun,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    golden = exported_run.pipeline.model_config.golden_file
+    config = tmp_path / "gates.yaml"
+    config.write_text(
+        json.dumps({"golden_file": str(golden), "gates": {"minimums": {"rows": 2}}}),
+        encoding="utf-8",
+    )
+    report = tmp_path / "report.json"
+    card = tmp_path / "card.md"
+    card.write_text("# Model card\n", encoding="utf-8")
+    export = str(exported_run.export_directory)
+    assert (
+        benchmark.main(["--export-dir", export, "--config", str(config), "--report", str(report)])
+        == 0
+    )
+    registry_config = str(release.DEFAULT_CONFIG_PATH.resolve())
+    monkeypatch.chdir(tmp_path)
+    tracking_uri = f"sqlite:///{tmp_path / 'mlflow.db'}"
+
+    exit_code = release.main(
+        [
+            "--tracking-uri",
+            tracking_uri,
+            "--config",
+            registry_config,
+            "publish",
+            "--export-dir",
+            export,
+            "--report",
+            str(report),
+            "--model-card",
+            str(card),
+            "--version",
+            "0.1.0",
+            "--deployment",
+            "shadow",
+        ],
+    )
+
+    assert exit_code == 0
+    client = MlflowClient(tracking_uri=tracking_uri, registry_uri=tracking_uri)
+    (version,) = client.search_model_versions("name='guardrail-classifier'")
+    assert version.tags["model_sha256"] == exported_run.artifact.sha256
+    assert version.tags["code_revision"] == "code-revision"
+    model_tags = client.get_registered_model("guardrail-classifier").tags
+    assert model_tags["deployment.shadow"] == str(version.version)

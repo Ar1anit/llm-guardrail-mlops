@@ -47,6 +47,7 @@ mlops = [
   "dvc-azure>=3.1,<4",
   "dvc-s3>=3.2,<4",
   "evidently>=0.6,<1",
+  "azureml-mlflow>=1.62,<2",
   "mlflow>=2.18,<4",
 ]
 

@@ -64,6 +64,10 @@ The benchmark exits non-zero when a release gate in `configs/evaluation/default.
 the export does not match its manifest. The gates are provisional; see
 [model governance](docs/model-governance.md).
 
+Benchmarked exports are released to the MLflow model registry with
+`python -m src.registry.release` (see [architecture](docs/architecture.md#model-versioning)).
+Release 0.1.0 is for [shadow mode only](docs/model-cards/guardrail-classifier-0.1.0.md).
+
 ## Data and model artifacts
 
 Datasets under `data/raw/` and `data/processed/` are intended to be tracked with DVC rather than

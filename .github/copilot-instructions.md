@@ -13,7 +13,10 @@ component, update the relevant architecture, threat-model, governance, and READM
 - `src/evaluation/` owns golden-dataset benchmarks and release metrics.
 - `src/serving/` owns the online inference boundary.
 - `src/monitoring/` owns telemetry and drift checks.
+- `src/registry/` owns model versioning: publishing releases to the MLflow registry and
+  moving deployment pointers.
 - `configs/` contains Hydra configuration.
+- `infra/` contains infrastructure as code (Bicep for Azure).
 - `data/` contains DVC-managed datasets; dataset contents must not be committed to Git.
 - `tests/` is organized into unit, integration, and contract suites.
 
