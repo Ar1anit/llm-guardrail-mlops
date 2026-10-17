@@ -178,7 +178,10 @@ After a version is in the registry, pushing a tag `model-vMAJOR.MINOR.PATCH` on 
 4. Build the serving image for `linux/amd64` and push it to
    `ghcr.io/ar1anit/guardrail-classifier:<version>`, with OCI labels for the model checksum and
    registry version, and a signed build-provenance attestation.
-5. Fail if the GHCR package is not private, because the image contains the weights.
+5. Fail if the GHCR package is not private, because the image contains the weights. The
+   check runs before the push and again after it. A package created by its first push inherits
+   the public repository's visibility, so set a new package to private immediately (package
+   settings, *Change visibility*); GitHub's API cannot change it.
 6. Create the GitHub Release with the model card as notes, and attach `model-card.md`,
    `benchmark-report.json`, `release.json`, `manifest.json`, and `SHA256SUMS`.
 
