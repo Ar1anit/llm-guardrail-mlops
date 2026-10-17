@@ -60,6 +60,18 @@ before a model is promoted:
 - **Jailbreak data** comes from one public source, `jackhhao/jailbreak-classification`, mostly
   role-play prompts from 2023. Recall on other jailbreak styles is unknown.
 
+## Releases
+
+- **Release record.** Every release has a model card in `docs/model-cards/`, a registry version
+  with checksum and lineage tags, and the benchmark report in the same MLflow run. Release
+  0.1.0 is [shadow mode only](model-cards/guardrail-classifier-0.1.0.md).
+- **Deployments** are named pointers (`deployment.<name>` tags on the registered model). Moving a
+  pointer is a promotion or rollback and needs the same review as the first release. Moving
+  `shadow` does not change request outcomes; any enforcing deployment needs calibrated
+  thresholds and a documented fail-open or fail-closed decision first.
+- **Immutability.** Registered versions are never edited. A second copy of each export also
+  sits in the `models` Blob container under a 365-day retention policy.
+
 Each export is written once to a fresh directory and never overwritten; its `manifest.json`
 records the dataset files, base-model revision, seed, settings, and library versions needed to
 reproduce it.

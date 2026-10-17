@@ -14,8 +14,8 @@ injection and jailbreak risk before those prompts reach a protected language mod
 4. **Serving** — a low-latency FastAPI or BentoML boundary backed by ONNX Runtime.
 5. **Monitoring** — prediction telemetry and Evidently AI drift reports.
 
-Data ingestion, the training pipeline, the golden-set evaluator, and the release benchmark are
-implemented; serving and monitoring are still placeholders. Components must be introduced through reviewed design proposals and
+Data ingestion, the training pipeline, the golden-set evaluator, the release benchmark, and
+model versioning are implemented; serving and monitoring are still placeholders. Components must be introduced through reviewed design proposals and
 accompanied by tests, model documentation, and threat analysis.
 
 ## Data flow
@@ -132,6 +132,37 @@ each gate's threshold, actual value, and result. An existing report is never ove
 | 3         | At least one gate failed. A gate on a missing metric fails.          | Yes            |
 | 2         | The export, golden file, or configuration could not be verified.     | No             |
 | 1         | Unexpected crash.                                                    | No             |
+
+## Model versioning
+
+Released models live in an MLflow model registry, hosted by an Azure Machine Learning workspace
+that has no compute (`infra/azure/mlflow-registry.bicep`). Set `MLFLOW_TRACKING_URI` to the
+workspace's `mlflowTrackingUri` deployment output, then run from the repository root:
+
+```bash
+uv run python -m src.registry.release publish --export-dir <export> --report <report.json> \
+  --model-card docs/model-cards/guardrail-classifier-<version>.md --version <version> \
+  [--deployment shadow]
+uv run python -m src.registry.release promote --version <version> --deployment shadow
+```
+
+`publish` refuses to release unless:
+
+- the export verifies against its manifest;
+- the benchmark report passed and names the same `model.onnx` and `manifest.json` SHA-256;
+- neither revision is dirty;
+- the release number and the model are both new.
+
+It logs the export, the report, and the model card to an MLflow run in the
+`guardrail-releases` experiment. It then registers the run's `export` folder as a new version of
+`guardrail-classifier`, tagged with `release`, `model_sha256`, `manifest_sha256`,
+`golden_sha256`, `code_revision`, and `dataset_revision`.
+
+The Azure ML registry does not support MLflow aliases or the MLflow 3 `register_model` call.
+Versions are therefore created with `create_model_version`, and a deployment is a tag on the
+registered model, `deployment.<name> = <version>`. `promote` moves that tag; versions are never
+changed. A missing tracking URI is an error, so a release never lands in a local `./mlruns`
+store by accident.
 
 ## Reliability principles
 

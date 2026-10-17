@@ -4,6 +4,7 @@ defaults:
   - serving: default
   - monitoring: default
   - evaluation: default
+  - registry: default
   - _self_
 
 project:
