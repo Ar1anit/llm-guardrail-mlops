@@ -280,7 +280,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     promote_parser.add_argument("--version", required=True)
     promote_parser.add_argument("--deployment", required=True)
     args = parser.parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+    # Third-party libraries log at WARNING: the Azure SDK logs request URLs and headers at INFO.
+    logging.basicConfig(level=logging.WARNING, format="%(asctime)s [%(levelname)s] %(message)s")
+    # Under `python -m` this module's logger is "__main__", outside the "src" hierarchy.
+    for name in ("src", __name__):
+        logging.getLogger(name).setLevel(logging.INFO)
 
     try:
         settings = load_settings(args.config)
