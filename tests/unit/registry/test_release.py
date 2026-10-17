@@ -1,93 +1,33 @@
 """Release verification and the registry flow, against a real local MLflow (SQLite) registry."""
 
 import json
-from collections.abc import Iterator
 from pathlib import Path
-from unittest.mock import Mock, patch
 
 import mlflow
 import pytest
 from mlflow import MlflowClient
-from src.evaluation.golden_evaluator import GoldenEvaluator
 from src.registry.release import (
     DEFAULT_CONFIG_PATH,
-    RegistrySettings,
-    ReleaseCandidate,
     ReleaseError,
     load_settings,
     main,
     promote,
     publish,
-    verify_candidate,
 )
 
-from tests.unit.evaluation.support import INFERENCE_SESSION, fake_session, sha256, write_export
-
-SETTINGS = RegistrySettings(model_name="guardrail-test", experiment_name="releases-test")
-
-
-def _load_evaluator(directory: Path) -> GoldenEvaluator:
-    with patch(INFERENCE_SESSION, return_value=fake_session()):
-        return GoldenEvaluator.from_export(directory, tokenizer_loader=Mock())
-
-
-def _write_report(export: Path, path: Path, **overrides: object) -> Path:
-    report: dict[str, object] = {
-        "schema_version": 1,
-        "passed": True,
-        "model": {
-            "model_sha256": sha256(export / "model.onnx"),
-            "manifest_sha256": sha256(export / "manifest.json"),
-        },
-        "golden_set": {"path": "data/golden_eval.jsonl", "sha256": "f" * 64},
-        "metrics": {"malicious_recall": 0.9, "false_positive_rate": 0.0},
-        **overrides,
-    }
-    path.write_text(json.dumps(report), encoding="utf-8")
-    return path
-
-
-def _set_lineage(export: Path, **lineage: str) -> None:
-    manifest_path = export / "manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["lineage"].update(lineage)
-    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-
-
-@pytest.fixture
-def release_files(tmp_path: Path) -> tuple[Path, Path, Path]:
-    export = write_export(tmp_path / "export")
-    card = tmp_path / "card.md"
-    card.write_text("# Model card\n", encoding="utf-8")
-    return export, _write_report(export, tmp_path / "report.json"), card
-
-
-def _candidate(files: tuple[Path, Path, Path], version: str = "0.1.0") -> ReleaseCandidate:
-    export, report, card = files
-    return verify_candidate(
-        version=version,
-        export_directory=export,
-        report_path=report,
-        model_card_path=card,
-        load_evaluator=_load_evaluator,
-    )
-
-
-@pytest.fixture
-def registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[MlflowClient]:
-    """A local SQLite MLflow server; artifacts land under ``tmp_path/mlruns``."""
-    monkeypatch.chdir(tmp_path)
-    uri = f"sqlite:///{tmp_path / 'mlflow.db'}"
-    mlflow.set_tracking_uri(uri)
-    mlflow.set_registry_uri(uri)
-    yield MlflowClient()
-    mlflow.set_tracking_uri("")
+from tests.unit.evaluation.support import sha256, write_export
+from tests.unit.registry.support import (
+    SETTINGS,
+    make_candidate,
+    set_lineage,
+    write_report,
+)
 
 
 def test_verify_candidate_collects_the_release_facts(
     release_files: tuple[Path, Path, Path],
 ) -> None:
-    candidate = _candidate(release_files)
+    candidate = make_candidate(release_files)
 
     assert candidate.model_sha256 == sha256(release_files[0] / "model.onnx")
     assert candidate.code_revision == "abc123"
@@ -110,20 +50,20 @@ def test_verify_candidate_rejects_a_report_that_does_not_vouch_for_the_export(
     message: str,
 ) -> None:
     export, report, _ = release_files
-    _write_report(export, report, **change)
+    write_report(export, report, **change)
 
     with pytest.raises(ReleaseError, match=message):
-        _candidate(release_files)
+        make_candidate(release_files)
 
 
 def test_verify_candidate_rejects_a_report_for_another_manifest(
     release_files: tuple[Path, Path, Path],
 ) -> None:
     export = release_files[0]
-    _set_lineage(export, experiment="changed")  # Changes manifest.json after benchmarking.
+    set_lineage(export, experiment="changed")  # Changes manifest.json after benchmarking.
 
     with pytest.raises(ReleaseError, match="different manifest"):
-        _candidate(release_files)
+        make_candidate(release_files)
 
 
 @pytest.mark.parametrize("key", ["code_revision", "dataset_revision"])
@@ -132,11 +72,11 @@ def test_verify_candidate_refuses_a_dirty_lineage(
     key: str,
 ) -> None:
     export, report, _ = release_files
-    _set_lineage(export, **{key: "abc123-dirty"})
-    _write_report(export, report)
+    set_lineage(export, **{key: "abc123-dirty"})
+    write_report(export, report)
 
     with pytest.raises(ReleaseError, match="dirty"):
-        _candidate(release_files)
+        make_candidate(release_files)
 
 
 @pytest.mark.parametrize("version", ["v0.1.0", "0.1", "01.0.0", "0.1.0-rc1"])
@@ -145,14 +85,14 @@ def test_verify_candidate_requires_a_plain_semantic_version(
     version: str,
 ) -> None:
     with pytest.raises(ReleaseError, match=r"MAJOR\.MINOR\.PATCH"):
-        _candidate(release_files, version)
+        make_candidate(release_files, version)
 
 
 def test_verify_candidate_requires_a_model_card(release_files: tuple[Path, Path, Path]) -> None:
     release_files[2].unlink()
 
     with pytest.raises(ReleaseError, match="Model card"):
-        _candidate(release_files)
+        make_candidate(release_files)
 
 
 def test_publish_registers_a_tagged_version_with_its_artifacts(
@@ -160,7 +100,7 @@ def test_publish_registers_a_tagged_version_with_its_artifacts(
     release_files: tuple[Path, Path, Path],
     tmp_path: Path,
 ) -> None:
-    candidate = _candidate(release_files)
+    candidate = make_candidate(release_files)
 
     version = publish(registry, SETTINGS, candidate, deployment="shadow")
 
@@ -185,12 +125,12 @@ def test_publish_refuses_a_repeated_release_or_model(
     registry: MlflowClient,
     release_files: tuple[Path, Path, Path],
 ) -> None:
-    publish(registry, SETTINGS, _candidate(release_files))
+    publish(registry, SETTINGS, make_candidate(release_files))
 
     with pytest.raises(ReleaseError, match="already exists"):
-        publish(registry, SETTINGS, _candidate(release_files))
+        publish(registry, SETTINGS, make_candidate(release_files))
     with pytest.raises(ReleaseError, match="already registered as version 1"):
-        publish(registry, SETTINGS, _candidate(release_files, "0.2.0"))
+        publish(registry, SETTINGS, make_candidate(release_files, "0.2.0"))
 
 
 def test_promote_moves_the_deployment_pointer(
@@ -198,15 +138,15 @@ def test_promote_moves_the_deployment_pointer(
     release_files: tuple[Path, Path, Path],
     tmp_path: Path,
 ) -> None:
-    publish(registry, SETTINGS, _candidate(release_files), deployment="shadow")
+    publish(registry, SETTINGS, make_candidate(release_files), deployment="shadow")
     other = write_export(tmp_path / "other")
     (other / "model.onnx").write_bytes(b"another graph")
-    _set_lineage(other)  # Keep the manifest; recompute checksums below.
+    set_lineage(other)  # Keep the manifest; recompute checksums below.
     manifest = json.loads((other / "manifest.json").read_text(encoding="utf-8"))
     manifest["files"]["model.onnx"] = sha256(other / "model.onnx")
     (other / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
-    files = (other, _write_report(other, tmp_path / "other.json"), release_files[2])
-    second = publish(registry, SETTINGS, _candidate(files, "0.2.0"))
+    files = (other, write_report(other, tmp_path / "other.json"), release_files[2])
+    second = publish(registry, SETTINGS, make_candidate(files, "0.2.0"))
 
     assert promote(registry, SETTINGS, "0.2.0", "shadow") == second
     tags = registry.get_registered_model(SETTINGS.model_name).tags
@@ -225,7 +165,7 @@ def test_promote_rejects_unknown_releases_and_bad_names(
     deployment: str,
     message: str,
 ) -> None:
-    publish(registry, SETTINGS, _candidate(release_files))
+    publish(registry, SETTINGS, make_candidate(release_files))
 
     with pytest.raises(ReleaseError, match=message):
         promote(registry, SETTINGS, release, deployment)

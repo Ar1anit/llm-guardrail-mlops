@@ -41,6 +41,8 @@ wandb/
 # Checkpoints and exported model artifacts
 checkpoints/
 artifacts/
+# Model versions fetched from the registry for serving images
+models/
 *.ckpt
 *.pt
 *.pth

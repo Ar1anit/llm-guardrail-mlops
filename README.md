@@ -4,9 +4,9 @@ A production-oriented open-source MLOps scaffold for detecting prompt injection 
 attempts in real time.
 
 > [!IMPORTANT]
-> This repository is currently a scaffold. It contains data-ingestion and model-training code but
-> no released classifier, trained model, API handler, or serving implementation, and must not be
-> treated as a security control.
+> This repository is pre-alpha. It contains data ingestion, training, evaluation, model
+> versioning, and a shadow-mode serving API. Release 0.1.0 only scores and logs prompts; it must
+> not be treated as a security control.
 
 ## Goals
 
@@ -47,9 +47,9 @@ uv run mypy
 uv run pytest
 ```
 
-The training tests in `tests/unit/training` run offline against a tiny local model and need the
-`training` extra. The integration and contract suites are still placeholders. CI currently
-installs only the `dev` group, so it cannot import the training dependencies.
+The training tests in `tests/unit/training` run offline against a tiny local model, and the
+registry tests run against a local SQLite MLflow; both need the `training` and `mlops` extras,
+which CI installs. The integration and contract suites are still placeholders.
 
 ## Data, training, and evaluation commands
 
@@ -67,6 +67,18 @@ the export does not match its manifest. The gates are provisional; see
 Benchmarked exports are released to the MLflow model registry with
 `python -m src.registry.release` (see [architecture](docs/architecture.md#model-versioning)).
 Release 0.1.0 is for [shadow mode only](docs/model-cards/guardrail-classifier-0.1.0.md).
+
+## Serving (shadow mode)
+
+```bash
+uv run python -m src.registry.fetch --deployment shadow --output models/shadow
+docker build -t guardrail-classifier:0.1.0 .
+docker run -p 127.0.0.1:8000:8000 -e GUARDRAIL_API_TOKEN=<random 32+ characters> \
+  --read-only --tmpfs /tmp guardrail-classifier:0.1.0
+```
+
+`POST /v1/classify` with `Authorization: Bearer <token>` and `{"prompt": "..."}` returns a
+verdict with `"action": "log_only"`. See [architecture](docs/architecture.md#serving-shadow-mode).
 
 ## Data and model artifacts
 

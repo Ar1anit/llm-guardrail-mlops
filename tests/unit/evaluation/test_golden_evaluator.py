@@ -352,3 +352,13 @@ def test_from_export_rejects_an_unknown_manifest_schema(tmp_path: Path) -> None:
 
     with pytest.raises(ArtifactVerificationError, match="schema_version 2"):
         _from_export(export)
+
+
+def test_onnx_runtime_telemetry_is_disabled_before_loading(tmp_path: Path) -> None:
+    with (
+        patch("src.evaluation.golden_evaluator.ort.disable_telemetry_events") as disable,
+        patch(INFERENCE_SESSION, return_value=fake_session()),
+    ):
+        GoldenEvaluator(model_file(tmp_path), Mock(), max_sequence_length=512)
+
+    disable.assert_called_once()
