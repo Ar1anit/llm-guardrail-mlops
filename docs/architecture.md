@@ -15,8 +15,8 @@ injection and jailbreak risk before those prompts reach a protected language mod
 5. **Monitoring** — prediction telemetry and Evidently AI drift reports.
 
 Data ingestion, the training pipeline, the golden-set evaluator, the release benchmark, model
-versioning, and shadow-mode serving are implemented; cloud deployment and monitoring are not
-yet. Components must be introduced through reviewed design proposals and accompanied by tests,
+versioning, shadow-mode serving, and its deployment to Azure Container Apps are implemented;
+monitoring is not yet. Components must be introduced through reviewed design proposals and accompanied by tests,
 model documentation, and threat analysis.
 
 ## Data flow
@@ -228,6 +228,37 @@ get `422`, and validation errors never echo the request body. A model error gets
 `500`. Logs carry the request id, prompt length, label, score, and latency, never prompt text.
 The API documentation routes are disabled. Inference is serialized with a lock, because fast
 tokenizers are not safe across threads.
+
+## Deploying (Azure Container Apps)
+
+`infra/azure/serving.bicep` creates, in `rg-llm-guardrail-serving`:
+
+- a Basic Azure Container Registry with the admin user disabled;
+- a user-assigned identity with only `AcrPull` on that registry, which the app uses to pull;
+- a Container Apps environment with a Log Analytics workspace (30-day retention);
+- the Container App `guardrail-shadow`: external HTTPS ingress on port 8000 (HTTP redirects),
+  an optional source-IP allowlist, startup, readiness, and liveness probes, 1 vCPU and 2 GiB,
+  and scale to zero by default. The API token is a Container App secret.
+
+**Automatic rollout.** After a successful release, `release.yml` calls `deploy.yml`, which can
+also be started by hand with a release number (for example, to roll back):
+
+1. Find the GHCR digest tagged with the release, and the `model_sha256` in that GitHub
+   Release's `release.json`.
+2. Verify the build provenance: the image must be attested as built by this repository's
+   `release.yml`. Anything else is refused.
+3. Sign in to Azure through OIDC as a separate deploy identity, trusted only by the
+   `production-shadow` environment (which accepts `main` and `model-v*` tags), with Contributor
+   on the serving resource group only.
+4. Import that digest into the registry with the job's short-lived token and check the digest.
+5. Point the app at the digest and wait for the new revision to be healthy.
+6. Smoke test: `/readyz` answers, an unauthenticated request gets `401`, `/v1/model` reports the
+   expected release and model checksum, and a classification answers with `log_only`.
+
+**Callers** read the token with
+`az containerapp secret show -n guardrail-shadow -g rg-llm-guardrail-serving --secret-name guardrail-api-token --query value -o tsv`.
+Rotate it with `az containerapp secret set` and restart the revision. Re-running the Bicep
+template sets the image and token to the values passed, so pass the current ones.
 
 ## Reliability principles
 

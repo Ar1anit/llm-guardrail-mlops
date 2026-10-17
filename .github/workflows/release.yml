@@ -24,6 +24,8 @@ jobs:
     # Azure trusts only this environment (federated credential subject), and the environment
     # accepts only model-v* tags.
     environment: model-release
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
     permissions:
       contents: write # Create the GitHub Release.
       packages: write # Push the image to GHCR.
@@ -192,3 +194,15 @@ jobs:
           --title "guardrail-classifier $VERSION"
           --notes-file release-notes.md
           --verify-tag
+
+  deploy:
+    name: Deploy to production-shadow
+    needs: release
+    uses: ./.github/workflows/deploy.yml
+    with:
+      version: ${{ needs.release.outputs.version }}
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
+      attestations: read

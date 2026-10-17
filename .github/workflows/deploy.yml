@@ -1,0 +1,193 @@
+name: Deploy shadow
+
+# Roll out one published model release to the shadow Container App. Called by release.yml after
+# a successful release, or started by hand with a release number (also used for rollback).
+# The image is deployed by digest only after its build provenance proves that release.yml in
+# this repository built it, and the rollout passes only if the live service reports the model
+# checksum recorded in that GitHub Release.
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Release number to deploy, e.g. 0.1.0
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release number to deploy, e.g. 0.1.0
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: deploy-production-shadow
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy ${{ inputs.version }} to production-shadow
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Azure trusts only this environment (federated credential subject), and the environment
+    # accepts only main and model-v* tags.
+    environment:
+      name: production-shadow
+      url: ${{ steps.rollout.outputs.url }}
+    permissions:
+      contents: read # Download release.json from the GitHub Release.
+      packages: read # Pull the image from GHCR for verification and import.
+      id-token: write # Azure OIDC sign-in.
+      attestations: read # Verify build provenance.
+    steps:
+      - name: Validate the release number
+        id: release
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if [[ ! "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::Release number '$VERSION' is not MAJOR.MINOR.PATCH."
+            exit 1
+          fi
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          {
+            echo "version=$VERSION"
+            echo "owner=$owner"
+            echo "image=ghcr.io/$owner/guardrail-classifier"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Resolve the image digest and the expected model
+        id: image
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWNER: ${{ steps.release.outputs.owner }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          digest="$(gh api "/users/$OWNER/packages/container/guardrail-classifier/versions" \
+            --jq "[.[] | select(.metadata.container.tags | index(\"$VERSION\"))][0].name")"
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::No GHCR image is tagged $VERSION."
+            exit 1
+          fi
+          model_sha256="$(gh release download "model-v$VERSION" --repo "$GITHUB_REPOSITORY" \
+            --pattern release.json --output - | jq -r .model_sha256)"
+          if [[ ! "$model_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::The GitHub Release model-v$VERSION has no usable release.json."
+            exit 1
+          fi
+          {
+            echo "digest=$digest"
+            echo "model_sha256=$model_sha256"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Verify build provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ steps.release.outputs.image }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          gh attestation verify "oci://$IMAGE@$DIGEST" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml"
+          docker logout ghcr.io
+
+      - name: Sign in to Azure (OIDC, no stored secret)
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Copy the image into the Azure registry
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACR_NAME: ${{ vars.ACR_NAME }}
+          IMAGE: ${{ steps.release.outputs.image }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          # The job token expires with this job; it is the only credential Azure sees.
+          az acr import --name "$ACR_NAME" --source "$IMAGE@$DIGEST" \
+            --image "guardrail-classifier:$VERSION" \
+            --username "$GITHUB_ACTOR" --password "$GH_TOKEN" --force
+          copied="$(az acr repository show --name "$ACR_NAME" \
+            --image "guardrail-classifier@$DIGEST" --query digest -o tsv)"
+          if [[ "$copied" != "$DIGEST" ]]; then
+            echo "::error::The registry holds $copied, not $DIGEST."
+            exit 1
+          fi
+
+      - name: Roll out by digest
+        id: rollout
+        env:
+          ACR_NAME: ${{ vars.ACR_NAME }}
+          APP: ${{ vars.SERVING_APP_NAME }}
+          RG: ${{ vars.SERVING_RESOURCE_GROUP }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          login_server="$(az acr show --name "$ACR_NAME" --query loginServer -o tsv)"
+          az containerapp update --name "$APP" --resource-group "$RG" \
+            --image "$login_server/guardrail-classifier@$DIGEST" -o none
+          revision="$(az containerapp show --name "$APP" --resource-group "$RG" \
+            --query properties.latestRevisionName -o tsv)"
+          for _ in $(seq 1 60); do
+            state="$(az containerapp revision show --name "$APP" --resource-group "$RG" \
+              --revision "$revision" --query properties.runningState -o tsv)"
+            health="$(az containerapp revision show --name "$APP" --resource-group "$RG" \
+              --revision "$revision" --query properties.healthState -o tsv)"
+            echo "revision $revision: $state / $health"
+            if [[ "$health" == "Healthy" ]]; then break; fi
+            if [[ "$state" == "Failed" || "$health" == "Unhealthy" ]]; then
+              echo "::error::Revision $revision failed to start."
+              exit 1
+            fi
+            sleep 10
+          done
+          if [[ "$health" != "Healthy" ]]; then
+            echo "::error::Revision $revision did not become healthy in time."
+            exit 1
+          fi
+          fqdn="$(az containerapp show --name "$APP" --resource-group "$RG" \
+            --query properties.configuration.ingress.fqdn -o tsv)"
+          echo "url=https://$fqdn" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test the live service
+        env:
+          APP: ${{ vars.SERVING_APP_NAME }}
+          RG: ${{ vars.SERVING_RESOURCE_GROUP }}
+          URL: ${{ steps.rollout.outputs.url }}
+          EXPECTED_SHA256: ${{ steps.image.outputs.model_sha256 }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          token="$(az containerapp secret show --name "$APP" --resource-group "$RG" \
+            --secret-name guardrail-api-token --query value -o tsv)"
+          echo "::add-mask::$token"
+          for _ in $(seq 1 30); do
+            if curl -fsS --max-time 10 "$URL/readyz" > /dev/null; then break; fi
+            sleep 5
+          done
+          curl -fsS --max-time 10 "$URL/readyz"
+          echo
+          status="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$URL/v1/classify" \
+            -H 'Content-Type: application/json' -d '{"prompt": "smoke test"}')"
+          if [[ "$status" != "401" ]]; then
+            echo "::error::An unauthenticated request got $status, not 401."
+            exit 1
+          fi
+          model="$(curl -fsS --max-time 10 "$URL/v1/model" -H "Authorization: Bearer $token")"
+          if [[ "$(jq -r .model_sha256 <<< "$model")" != "$EXPECTED_SHA256" ]] \
+            || [[ "$(jq -r .release <<< "$model")" != "$VERSION" ]]; then
+            echo "::error::The live service does not serve release $VERSION ($EXPECTED_SHA256)."
+            exit 1
+          fi
+          verdict="$(curl -fsS --max-time 30 -X POST "$URL/v1/classify" \
+            -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+            -d '{"prompt": "What is the capital of France?"}')"
+          if [[ "$(jq -r .action <<< "$verdict")" != "log_only" ]]; then
+            echo "::error::The service did not answer in shadow mode."
+            exit 1
+          fi
+          echo "Release $VERSION is live at $URL in shadow mode."
