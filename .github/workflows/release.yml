@@ -101,6 +101,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Refuse to push into a package that is not private
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWNER: ${{ steps.tag.outputs.owner }}
+        run: |
+          # A package created by its first push inherits the public repository's visibility,
+          # so the first release still relies on the check after the push.
+          if visibility="$(gh api "/users/$OWNER/packages/container/guardrail-classifier" --jq .visibility 2>/dev/null)"; then
+            if [[ "$visibility" != "private" ]]; then
+              echo "::error::The GHCR package is $visibility; make it private before releasing."
+              exit 1
+            fi
+          else
+            echo "::warning::The GHCR package does not exist yet; its first push may be public."
+          fi
+
       - name: Build and push the serving image
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
