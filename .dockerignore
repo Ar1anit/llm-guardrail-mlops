@@ -1,9 +1,9 @@
-# Only pyproject.toml, uv.lock, README.md, src/, configs/, and models/shadow/ are needed.
+# Only pyproject.toml, uv.lock, README.md, src/, configs/, and models/serving/ are needed.
 *
 !pyproject.toml
 !uv.lock
 !README.md
 !src/
 !configs/
-!models/shadow/
+!models/serving/
 **/__pycache__

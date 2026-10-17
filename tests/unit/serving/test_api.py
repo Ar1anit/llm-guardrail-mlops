@@ -56,7 +56,7 @@ def _model_directory(root: Path, **release_overrides: str) -> Path:
     export = write_export(root / "export")
     release = {
         "model_name": "guardrail-classifier",
-        "deployment": "shadow",
+        "selector": "release=0.1.0",
         "registry_version": "1",
         "release": "0.1.0",
         "model_sha256": sha256(export / "model.onnx"),
@@ -197,7 +197,7 @@ def test_shipped_settings_require_authentication() -> None:
     settings = load_settings(DEFAULT_CONFIG_PATH)
 
     assert (settings.mode, settings.require_auth) == ("shadow", True)
-    assert settings.model_directory == Path("models/shadow")
+    assert settings.model_directory == Path("models/serving")
 
 
 def test_read_token_requires_a_long_token_unless_auth_is_disabled(tmp_path: Path) -> None:

@@ -165,6 +165,26 @@ registered model, `deployment.<name> = <version>`. `promote` moves that tag; ver
 changed. A missing tracking URI is an error, so a release never lands in a local `./mlruns`
 store by accident.
 
+## Publishing a release on GitHub
+
+After a version is in the registry, pushing a tag `model-vMAJOR.MINOR.PATCH` on a commit of
+`main` runs `.github/workflows/release.yml`:
+
+1. Validate the tag and that the commit is on `main`.
+2. Sign in to Azure through OIDC. The Entra app trusts only the `model-release` GitHub
+   environment, which accepts only `model-v*` tags; no secret is stored.
+3. `fetch --release <version>` downloads and verifies exactly that release, plus its benchmark
+   report and model card.
+4. Build the serving image for `linux/amd64` and push it to
+   `ghcr.io/ar1anit/guardrail-classifier:<version>`, with OCI labels for the model checksum and
+   registry version, and a signed build-provenance attestation.
+5. Fail if the GHCR package is not private, because the image contains the weights.
+6. Create the GitHub Release with the model card as notes, and attach `model-card.md`,
+   `benchmark-report.json`, `release.json`, `manifest.json`, and `SHA256SUMS`.
+
+The weights are never attached to the public release. Verify an image with
+`gh attestation verify oci://ghcr.io/ar1anit/guardrail-classifier@<digest> --repo Ar1anit/llm-guardrail-mlops`.
+
 ## Serving (shadow mode)
 
 `src/serving/api.py` serves one verified model version. Shadow mode means the service scores
@@ -174,12 +194,13 @@ enforcing mode exists yet.
 **Building an image.** One image holds exactly one model version:
 
 ```bash
-uv run python -m src.registry.fetch --deployment shadow --output models/shadow
+uv run python -m src.registry.fetch --release <release> --output models/serving
 docker build -t guardrail-classifier:<release> .
 ```
 
-`fetch` resolves the `deployment.shadow` tag, downloads that version's export, verifies it
-against its manifest and its `model_sha256` tag, and writes `models/shadow/release.json`. The
+`fetch` selects a version by release number (`--release`) or by deployment tag
+(`--deployment shadow`), downloads its export, verifies it against its manifest and its
+`model_sha256` tag, and writes `models/serving/release.json`, which records the selector. The
 image contains the locked runtime dependencies (no torch), runs as a non-root user, works on a
 read-only file system, and sets the Hugging Face offline flags. Promoting a release therefore
 means fetching and building a new image.
