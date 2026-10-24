@@ -3,7 +3,7 @@
 #   uv run python -m src.registry.fetch --release 0.1.0 --output models/serving
 ARG PYTHON_IMAGE=python:3.14-slim-bookworm
 
-FROM ghcr.io/astral-sh/uv:0.13.1 AS uv
+FROM ghcr.io/astral-sh/uv:0.13.5 AS uv
 
 FROM ${PYTHON_IMAGE} AS build
 COPY --from=uv /uv /bin/uv
