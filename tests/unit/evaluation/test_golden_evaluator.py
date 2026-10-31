@@ -242,6 +242,15 @@ def test_read_golden_records_rejects_malformed_lines(
         read_golden_records(path)
 
 
+def test_read_golden_records_keeps_a_text_with_a_line_separator(tmp_path: Path) -> None:
+    path = tmp_path / "golden.jsonl"
+    text = "first line\u2028second line\x85third"
+    record = {"text": text, "label": 1, "attack_type": "jailbreak"}
+    path.write_text(json.dumps(record, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    assert [r["text"] for r in read_golden_records(path)] == [text]
+
+
 def test_read_golden_records_rejects_an_empty_file(tmp_path: Path) -> None:
     path = tmp_path / "golden.jsonl"
     path.write_text("\n", encoding="utf-8")

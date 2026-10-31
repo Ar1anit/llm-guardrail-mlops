@@ -189,7 +189,9 @@ def _verify_contract(manifest: Mapping[str, object], files: Mapping[str, str]) -
 
 def _parse_golden_records(data: bytes) -> list[GoldenRecord]:
     records: list[GoldenRecord] = []
-    for line_number, line in enumerate(data.decode("utf-8").splitlines(), start=1):
+    # JSONL separates records with "\n" only; str.splitlines would also split inside a text
+    # at characters such as U+2028, which JSON encoders write unescaped.
+    for line_number, line in enumerate(data.decode("utf-8").split("\n"), start=1):
         if not line.strip():
             continue
         try:
