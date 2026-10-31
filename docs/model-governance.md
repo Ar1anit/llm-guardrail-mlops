@@ -24,8 +24,9 @@ before a model is promoted:
 - **Decision rule** is `argmax` over the logits, equivalent to a 0.5 malicious-probability
   threshold. No threshold has been calibrated against documented false-positive and
   false-negative tolerances.
-- **The loss is unweighted.** In the current data about 10% of training rows are malicious;
-  class weighting or resampling would raise recall at the cost of precision.
+- **The loss is unweighted.** In the current data about 48% of training rows are malicious, far
+  above any realistic traffic prevalence; class weighting or resampling would move the
+  precision-recall balance.
 - **Inputs are truncated** at `max_sequence_length` (512 tokens by default). Text beyond the limit
   is invisible to the classifier in training and in serving.
 - **Release evidence** must come from the benchmark report written by
@@ -33,11 +34,13 @@ before a model is promoted:
   `GoldenEvaluator.from_export`, which verifies the export against its manifest, and the report
   names the model, manifest, and golden-file SHA-256. The validation metrics stored in an
   export's `manifest.json` are for development only.
-- **The golden set is still too small to calibrate thresholds on.** After the jailbreak source
-  was added, `data/golden_eval.jsonl` has 200 rows: 154 benign, 32 jailbreak, 13 injection, and
-  one hard negative. Stratifying on `attack_type` lowered the injection count from 20 to 13, so
-  one missed injection moves its slice recall by almost eight points. Hard negatives cannot be
-  measured. The golden set must be expanded before acceptance thresholds are calibrated.
+- **The golden set has a fixed quota per attack type.** `data/golden_eval.jsonl` has 900 rows:
+  300 benign, 200 hard negatives, 200 injections, and 200 jailbreaks, so one error moves a slice
+  rate by half a point. Before this change it had 200 rows with 13 injections and one hard
+  negative. The class mix is set by the quotas, not by traffic, so golden precision and the
+  overall false-positive rate (which now includes the hard negatives) are not comparable with
+  reports on the earlier golden set. Thresholds can now be calibrated, starting from a baseline
+  run on this set; the per-slice flag rates are the numbers to calibrate against.
 - **Release gates are provisional.** `configs/evaluation/default.yaml` sets floors for recall,
   precision, the false-positive rate, the injection and jailbreak flag rates, and the minimum
   support for each slice. The benchmark exits non-zero when one fails or its metric is missing.
@@ -54,11 +57,19 @@ before a model is promoted:
   appends `-dirty` to the revision. A model with a `-dirty` revision must not be released.
 - **Training device.** `use_cpu: false` lets the trainer use CUDA or Apple MPS. Results are
   reproducible only on the same device and library versions, which the manifest records.
-- **Validation coverage** is limited: the validation split has 429 rows with 29 injections,
-  69 jailbreaks, and one hard negative, so false positives on benign security-education prompts
-  are barely measured.
-- **Jailbreak data** comes from one public source, `jackhhao/jailbreak-classification`, mostly
-  role-play prompts from 2023. Recall on other jailbreak styles is unknown.
+- **Validation coverage:** the validation split has 998 rows: 316 benign, 207 hard negatives,
+  305 injections, and 170 jailbreaks.
+- **Jailbreak data** comes from `jackhhao/jailbreak-classification` and
+  `TrustAIRLab/in-the-wild-jailbreak-prompts`, which overlap heavily and are mostly role-play
+  prompts from 2023. Recall on newer or optimized jailbreak styles is unknown.
+- **Injection data** is dominated by direct "ignore your instructions" and prompt-leaking
+  prompts (Gandalf, deepset, and a multilingual set). Indirect injection through retrieved
+  documents or tool output is not represented. The multilingual rows are scored by an
+  English-only base model.
+- **Hard negatives** come mostly from OR-Bench-Hard-1K, whose benign labels were assigned by an
+  LLM-judge ensemble, and from XSTest's human-written safe prompts. Some OR-Bench prompts are
+  borderline requests; they are benign here because they do not attack the model's
+  instructions. A guardrail for harmful content would label them differently.
 
 ## Releases
 

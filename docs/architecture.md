@@ -35,10 +35,23 @@ flowchart LR
 
 `src/data/ingestion.py` (`uv run python -m src.data.ingestion`) builds the DVC-tracked datasets:
 
-1. **Fetch** three Hugging Face datasets, each pinned to a commit SHA: `deepset/prompt-injections`
-   (injection and benign), `databricks/databricks-dolly-15k` (benign), and
-   `jackhhao/jailbreak-classification` (jailbreak and benign, Apache-2.0, one pinned CSV file).
-   Ten curated hard negatives are added.
+1. **Fetch** Hugging Face datasets, each pinned to a commit SHA, with the license recorded in the
+   lineage:
+
+   | Source | Attack types | License |
+   | --- | --- | --- |
+   | `deepset/prompt-injections` (train and test splits) | injection, benign | Apache-2.0 |
+   | `Lakera/gandalf_ignore_instructions` | injection | MIT |
+   | `yanismiraoui/prompt_injections` (seven languages) | injection | Apache-2.0 |
+   | `databricks/databricks-dolly-15k` | benign | CC-BY-SA-3.0 |
+   | `jackhhao/jailbreak-classification` (one pinned CSV file) | jailbreak, benign | Apache-2.0 |
+   | `TrustAIRLab/in-the-wild-jailbreak-prompts` (`jailbreak_2023_12_25`) | jailbreak | MIT |
+   | `natolambert/xstest-v2-copy` (safe prompts only) | hard negative | CC-BY-4.0 |
+   | `bench-llm/or-bench` (`or-bench-hard-1k`) | hard negative | CC-BY-4.0 |
+
+   Ten curated security-education hard negatives are added. Hard negatives are benign prompts that
+   look like attacks or ask about sensitive topics; XSTest's unsafe `contrast_` prompts are
+   skipped, because they are harmful requests rather than attacks on the model.
 2. **Validate** every row against `PromptRecord`. The attack type fixes the label: `benign` and
    `hard_negative` are 0, `injection` and `jailbreak` are 1. A row whose text is blank, too short,
    or too long is rejected and counted. A missing or unknown label, a source with no rows, or a
@@ -50,10 +63,15 @@ flowchart LR
    An input that arrives with both labels raises `LabelConflictError`. Changing the base model or
    `max_sequence_length` means re-running ingestion; the training leakage check reports when it
    is needed.
-4. **Split** into the golden set (200 rows), train, and validation, stratified on `attack_type`.
-   Ingestion refuses data in which any attack type has no rows, so every slice can be measured.
-5. **Record lineage** in `data/raw/ingestion_manifest.json`: source revisions and files, rows
-   read, rejected and kept, the seed, and attack-type counts for each split.
+4. **Split** off the golden set by a fixed quota per attack type (`GOLDEN_QUOTAS`: 300 benign
+   and 200 each of hard negatives, injections, and jailbreaks), stratified on source within each
+   type. The rest is split into train and validation, stratified on `attack_type`. A quota above
+   half of its type's rows raises, and so does data in which any attack type has no rows. The
+   quotas fix the golden class mix, so golden precision is not the precision at real traffic
+   prevalence.
+5. **Record lineage** in `data/raw/ingestion_manifest.json`: source revisions, licenses, configs
+   and files, rows read, rejected and kept, the seed, the golden quotas, attack-type counts for
+   each split, and source counts in the golden set.
 
 Logs and errors contain counts and row indices, never prompt text.
 
