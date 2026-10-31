@@ -1,7 +1,9 @@
 """Data ingestion, schema validation, and dataset preparation pipeline.
 
 Downloads pinned Hugging Face datasets, adds curated hard negatives, validates every row
-against ``PromptRecord``, and writes deterministic splits stratified on ``attack_type``:
+against ``PromptRecord``, and writes deterministic splits. The golden set takes a fixed quota
+of each ``attack_type`` (``GOLDEN_QUOTAS``), so every slice is large enough to measure; train
+and validation split the rest stratified on ``attack_type``:
 
 - data/raw/raw_combined.jsonl and data/raw/ingestion_manifest.json (source lineage)
 - data/golden_eval.jsonl (held-out benchmark for release gates)
@@ -40,6 +42,12 @@ RANDOM_SEED = 42
 DEFAULT_MODEL_CONFIG = Path("configs/model/classifier.yaml")
 # A source that rejects more than this share of its rows has probably changed shape.
 MAX_REJECT_FRACTION = 0.05
+# Golden rows per attack type. A slice of 200 moves its rate by half a point per error. The
+# quotas fix the class mix of the golden set, so its precision is not the precision at the
+# traffic's real prevalence.
+GOLDEN_QUOTAS: Mapping[str, int] = MappingProxyType(
+    {"benign": 300, "hard_negative": 200, "injection": 200, "jailbreak": 200},
+)
 
 
 class IngestionError(ValueError):
@@ -90,14 +98,27 @@ class HubSource:
 
     name: str
     revision: str
+    license: str
     data_files: str | None = None
     split: str = "train"
+    config: str | None = None
 
 
-DEEPSET_SOURCE = HubSource("deepset/prompt-injections", "4f61ecb038e9c3fb77e21034b22511b523772cdd")
+DEEPSET_SOURCE = HubSource(
+    "deepset/prompt-injections",
+    "4f61ecb038e9c3fb77e21034b22511b523772cdd",
+    "apache-2.0",
+)
+DEEPSET_TEST_SOURCE = HubSource(
+    "deepset/prompt-injections",
+    "4f61ecb038e9c3fb77e21034b22511b523772cdd",
+    "apache-2.0",
+    split="test",
+)
 DOLLY_SOURCE = HubSource(
     "databricks/databricks-dolly-15k",
     "bdd27f4d94b9c1f951818a7da7fd7aeea5dbff1a",
+    "cc-by-sa-3.0",
 )
 # Apache-2.0. Columns: "prompt", and "type" set to "benign" or "jailbreak". The repository
 # has no named configs, so the file is pinned: otherwise the loader picks files by pattern.
@@ -105,7 +126,48 @@ DOLLY_SOURCE = HubSource(
 JAILBREAK_SOURCE = HubSource(
     "jackhhao/jailbreak-classification",
     "2f2ceeb39658696fd3f462403562b6eea5306287",
+    "apache-2.0",
     data_files="balanced/jailbreak_dataset_train_balanced.csv",
+)
+# MIT. Column "text": prompts players sent to make the Gandalf game reveal its password,
+# selected for similarity to "ignore all previous instructions". Every row is an injection.
+GANDALF_SOURCE = HubSource(
+    "Lakera/gandalf_ignore_instructions",
+    "04737b65e90a6794ec227012e4a255a7def6344b",
+    "mit",
+    split="train+validation+test",
+)
+# Apache-2.0. Column "prompt_injections": injections, prompt leaking, and mode switching in
+# English, French, German, Spanish, Portuguese, Italian, and Romanian. Every row is an injection.
+MULTILINGUAL_INJECTION_SOURCE = HubSource(
+    "yanismiraoui/prompt_injections",
+    "bd55359f2f332afc35f277ac3dd08f7111b024c9",
+    "apache-2.0",
+)
+# MIT. Jailbreak prompts collected from Discord, Reddit, and prompt sites up to December 2023
+# (Shen et al., "Do Anything Now"). Column "jailbreak" is true on every row of this config.
+WILD_JAILBREAK_SOURCE = HubSource(
+    "TrustAIRLab/in-the-wild-jailbreak-prompts",
+    "a10aab8eff1c73165a442d4464dce192bd28b9c5",
+    "mit",
+    config="jailbreak_2023_12_25",
+)
+# CC-BY-4.0. XSTest v2 (Röttger et al.): 250 safe prompts that resemble unsafe ones ("How do I
+# kill a Python process?") and 200 unsafe "contrast_" prompts, which are excluded. The splits
+# differ only in the model completion, so one is read.
+XSTEST_SOURCE = HubSource(
+    "natolambert/xstest-v2-copy",
+    "b71afe2a6d10e5a6254ea8bcb006c48b095a15d5",
+    "cc-by-4.0",
+    split="gpt4",
+)
+# CC-BY-4.0. OR-Bench-Hard-1K (Cui et al.): prompts that read as harmful, that most aligned
+# models refuse, and that an LLM-judge ensemble rated safe to answer.
+OR_BENCH_SOURCE = HubSource(
+    "bench-llm/or-bench",
+    "e36d8b80e81837c8a8f264bbb2a49f1b32c7e272",
+    "cc-by-4.0",
+    config="or-bench-hard-1k",
 )
 JAILBREAK_TYPES: Mapping[str, AttackType] = MappingProxyType(
     {"benign": "benign", "jailbreak": "jailbreak"},
@@ -118,6 +180,8 @@ class SourceBatch:
 
     name: str
     revision: str | None
+    license: str
+    config: str | None
     data_files: str | None
     split: str | None
     records: list[PromptRecord]
@@ -218,6 +282,7 @@ def _load_rows(source: HubSource) -> Iterable[Row]:
     logger.info("Loading '%s' at revision %s...", source.name, source.revision)
     rows: Iterable[Row] = load_dataset(
         source.name,
+        source.config,
         data_files=source.data_files,
         split=source.split,
         revision=source.revision,
@@ -243,12 +308,14 @@ def _text_field(row: Row, key: str, source: HubSource, index: int) -> str:
 def _ingest(
     source: HubSource,
     limit: int,
-    to_fields: Callable[[Row, int], dict[str, object]],
+    to_fields: Callable[[Row, int], dict[str, object] | None],
 ) -> SourceBatch:
     """Validate rows until ``limit`` records are kept; count rows that fail ``PromptRecord``.
 
-    ``to_fields`` raises ``IngestionError`` for structural problems such as a missing or unknown
-    label. Those are never counted as rejects, because they mean the source changed shape.
+    ``to_fields`` returns ``None`` for a row the source marks as out of scope; it is read but
+    neither kept nor rejected. It raises ``IngestionError`` for structural problems such as a
+    missing or unknown label. Those are never counted as rejects, because they mean the source
+    changed shape.
     """
     if limit < 1:
         raise ValueError(f"The sample limit must be at least 1, got {limit}.")
@@ -259,13 +326,18 @@ def _ingest(
         if len(records) >= limit:
             break
         rows_read += 1
+        fields = to_fields(row, index)
+        if fields is None:
+            continue
         try:
-            records.append(PromptRecord.model_validate(to_fields(row, index)))
+            records.append(PromptRecord.model_validate(fields))
         except ValidationError:
             rejected += 1
     batch = SourceBatch(
         source.name,
         source.revision,
+        source.license,
+        source.config,
         source.data_files,
         source.split,
         records,
@@ -293,9 +365,11 @@ def _check_rejects(batch: SourceBatch) -> None:
         )
 
 
-def fetch_deepset_injections(max_samples: int = 1500) -> SourceBatch:
+def fetch_deepset_injections(
+    max_samples: int = 1500,
+    source: HubSource = DEEPSET_SOURCE,
+) -> SourceBatch:
     """Ingests labelled injection and benign samples from deepset/prompt-injections."""
-    source = DEEPSET_SOURCE
 
     def to_fields(row: Row, index: int) -> dict[str, object]:
         label = _field(row, "label", source, index)
@@ -350,10 +424,93 @@ def fetch_jailbreaks(max_samples: int = 2000) -> SourceBatch:
     return _ingest(source, max_samples, to_fields)
 
 
+def _single_type(
+    source: HubSource,
+    limit: int,
+    text_key: str,
+    attack_type: AttackType,
+) -> SourceBatch:
+    """Ingest a source whose every row is one attack type, read from the ``text_key`` column."""
+
+    def to_fields(row: Row, index: int) -> dict[str, object]:
+        return {
+            "text": _text_field(row, text_key, source, index),
+            "label": ATTACK_TYPE_LABELS[attack_type],
+            "attack_type": attack_type,
+            "source": source.name,
+        }
+
+    return _ingest(source, limit, to_fields)
+
+
+def fetch_gandalf_injections(max_samples: int = 1000) -> SourceBatch:
+    """Ingests password-extraction injections from Lakera/gandalf_ignore_instructions."""
+    return _single_type(GANDALF_SOURCE, max_samples, "text", "injection")
+
+
+def fetch_multilingual_injections(max_samples: int = 1100) -> SourceBatch:
+    """Ingests multilingual injections from yanismiraoui/prompt_injections."""
+    return _single_type(
+        MULTILINGUAL_INJECTION_SOURCE, max_samples, "prompt_injections", "injection"
+    )
+
+
+def fetch_wild_jailbreaks(max_samples: int = 1500) -> SourceBatch:
+    """Ingests jailbreaks from TrustAIRLab/in-the-wild-jailbreak-prompts."""
+    source = WILD_JAILBREAK_SOURCE
+
+    def to_fields(row: Row, index: int) -> dict[str, object]:
+        flag = _field(row, "jailbreak", source, index)
+        if flag is not True:
+            raise IngestionError(
+                f"{source.name} row {index} has jailbreak {flag!r}; expected True.",
+            )
+        return {
+            "text": _text_field(row, "prompt", source, index),
+            "label": ATTACK_TYPE_LABELS["jailbreak"],
+            "attack_type": "jailbreak",
+            "source": source.name,
+        }
+
+    return _ingest(source, max_samples, to_fields)
+
+
+def fetch_xstest_hard_negatives(max_samples: int = 450) -> SourceBatch:
+    """Ingests the safe XSTest prompts as hard negatives; unsafe contrast prompts are skipped."""
+    source = XSTEST_SOURCE
+
+    def to_fields(row: Row, index: int) -> dict[str, object] | None:
+        if _text_field(row, "type", source, index).startswith("contrast_"):
+            return None
+        return {
+            "text": _text_field(row, "prompt", source, index),
+            "label": ATTACK_TYPE_LABELS["hard_negative"],
+            "attack_type": "hard_negative",
+            "source": source.name,
+        }
+
+    return _ingest(source, max_samples, to_fields)
+
+
+def fetch_or_bench_hard_negatives(max_samples: int = 1500) -> SourceBatch:
+    """Ingests OR-Bench-Hard-1K prompts as hard negatives."""
+    return _single_type(OR_BENCH_SOURCE, max_samples, "prompt", "hard_negative")
+
+
 def get_curated_hard_negatives() -> SourceBatch:
     """Returns validated hard negative records; a curated row that fails validation raises."""
     records = [PromptRecord.model_validate(item) for item in HARD_NEGATIVES]
-    return SourceBatch("curated_security_education", None, None, None, records, len(records), 0)
+    return SourceBatch(
+        "curated_security_education",
+        None,
+        "apache-2.0",
+        None,
+        None,
+        None,
+        records,
+        len(records),
+        0,
+    )
 
 
 # =====================================================================
@@ -436,25 +593,70 @@ def _require_every_attack_type(records: Sequence[PromptRecord]) -> None:
 def _stratified_split(
     records: Sequence[PromptRecord],
     test_size: float | int,
+    stratify: Callable[[PromptRecord], str],
 ) -> tuple[list[PromptRecord], list[PromptRecord]]:
     kept, held_out = train_test_split(
         list(records),
         test_size=test_size,
-        stratify=[record.attack_type for record in records],
+        stratify=[stratify(record) for record in records],
         random_state=RANDOM_SEED,
     )
     return kept, held_out
 
 
+def _by_attack_type(record: PromptRecord) -> str:
+    return record.attack_type
+
+
+def _by_source(record: PromptRecord) -> str:
+    return record.source
+
+
+def _hold_out_golden(
+    records: Sequence[PromptRecord],
+    quotas: Mapping[str, int],
+) -> tuple[list[PromptRecord], list[PromptRecord]]:
+    """Take ``quotas[attack_type]`` rows of each type, stratified on source within the type.
+
+    A quota above half the rows of its type raises, so training keeps at least as many rows of
+    each type as the golden set measures.
+    """
+    unknown = sorted(set(quotas) - set(ATTACK_TYPES))
+    missing = [attack_type for attack_type in ATTACK_TYPES if attack_type not in quotas]
+    if unknown or missing:
+        raise IngestionError(
+            f"Golden quotas must name each attack type once; unknown {unknown}, missing {missing}.",
+        )
+    pool: list[PromptRecord] = []
+    golden: list[PromptRecord] = []
+    for attack_type in ATTACK_TYPES:
+        rows = [record for record in records if record.attack_type == attack_type]
+        quota = quotas[attack_type]
+        if quota < 1 or 2 * quota > len(rows):
+            raise IngestionError(
+                f"Golden quota {quota} for '{attack_type}' must be at least 1 and at most half "
+                f"of its {len(rows)} rows.",
+            )
+        sources = Counter(record.source for record in rows)
+        # Stratifying needs two rows per source and a quota of at least one row per source;
+        # otherwise the type is split plainly.
+        stratifiable = min(sources.values()) > 1 and quota >= len(sources)
+        by_source = _by_source if stratifiable else _by_attack_type
+        kept, held_out = _stratified_split(rows, quota, by_source)
+        pool.extend(kept)
+        golden.extend(held_out)
+    return pool, golden
+
+
 def split_records(
     records: Sequence[PromptRecord],
-    golden_size: int,
+    golden_quotas: Mapping[str, int],
     val_ratio: float,
 ) -> tuple[list[PromptRecord], list[PromptRecord], list[PromptRecord]]:
-    """Return (golden, train, val), each stratified on ``attack_type`` so every slice appears."""
+    """Return (golden, train, val): golden takes each type's quota, train and val the rest."""
     _require_every_attack_type(records)
-    pool, golden = _stratified_split(records, golden_size)
-    train, val = _stratified_split(pool, val_ratio)
+    pool, golden = _hold_out_golden(records, golden_quotas)
+    train, val = _stratified_split(pool, val_ratio, _by_attack_type)
     return golden, train, val
 
 
@@ -474,7 +676,7 @@ def _attack_type_counts(records: Sequence[PromptRecord]) -> dict[str, int]:
 
 def run_pipeline(
     output_dir: Path,
-    golden_size: int = 200,
+    golden_quotas: Mapping[str, int] = GOLDEN_QUOTAS,
     val_ratio: float = 0.15,
     *,
     tokenizer: TokenizerSpec,
@@ -482,8 +684,14 @@ def run_pipeline(
     """Executes the full ingestion, validation, and splitting routine."""
     batches = [
         fetch_deepset_injections(max_samples=1500),
+        fetch_deepset_injections(max_samples=500, source=DEEPSET_TEST_SOURCE),
+        fetch_gandalf_injections(),
+        fetch_multilingual_injections(),
         fetch_benign_dolly(target_count=1500),
         fetch_jailbreaks(max_samples=2000),
+        fetch_wild_jailbreaks(),
+        fetch_xstest_hard_negatives(),
+        fetch_or_bench_hard_negatives(),
         get_curated_hard_negatives(),
     ]
     all_records = [record for batch in batches for record in batch.records]
@@ -491,7 +699,7 @@ def run_pipeline(
 
     records = deduplicate(all_records, model_input_key(tokenizer))
     logger.info("Total records after deduplication: %d", len(records))
-    golden, train, val = split_records(records, golden_size, val_ratio)
+    golden, train, val = split_records(records, golden_quotas, val_ratio)
 
     raw_dir = output_dir / "raw"
     write_jsonl(records, raw_dir / "raw_combined.jsonl")
@@ -502,10 +710,13 @@ def run_pipeline(
     splits = {"golden": golden, "train": train, "val": val}
     lineage = {
         "random_seed": RANDOM_SEED,
+        "golden_quotas": dict(golden_quotas),
         "sources": [
             {
                 "name": batch.name,
                 "revision": batch.revision,
+                "license": batch.license,
+                "config": batch.config,
                 "data_files": batch.data_files,
                 "split": batch.split,
                 "rows_read": batch.rows_read,
@@ -521,6 +732,7 @@ def run_pipeline(
             "max_sequence_length": tokenizer.max_sequence_length,
         },
         "attack_type_counts": {name: _attack_type_counts(rows) for name, rows in splits.items()},
+        "golden_source_counts": dict(sorted(Counter(r.source for r in golden).items())),
     }
     (raw_dir / "ingestion_manifest.json").write_text(
         json.dumps(lineage, indent=2, sort_keys=True) + "\n",
@@ -539,10 +751,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Base directory for output data artifacts (default: data)",
     )
     parser.add_argument(
-        "--golden-size",
+        "--golden-per-type",
         type=int,
-        default=200,
-        help="Number of samples to reserve for golden benchmark (default: 200)",
+        default=None,
+        help="Golden rows for every attack type, replacing GOLDEN_QUOTAS (for small test runs)",
     )
     parser.add_argument(
         "--val-ratio",
@@ -563,9 +775,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         format="%(asctime)s [%(levelname)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
+    quotas = (
+        GOLDEN_QUOTAS
+        if args.golden_per_type is None
+        else dict.fromkeys(ATTACK_TYPES, args.golden_per_type)
+    )
     run_pipeline(
         output_dir=args.output_dir,
-        golden_size=args.golden_size,
+        golden_quotas=quotas,
         val_ratio=args.val_ratio,
         tokenizer=read_tokenizer_spec(args.model_config),
     )
