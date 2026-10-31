@@ -635,7 +635,9 @@ def split_records(
     rows = list(zip(records, clusters, strict=True))
     pool, golden = _take_clusters(rows, golden_quotas, "golden")
     pool_counts = Counter(record.attack_type for record, _ in pool)
-    val_targets = {t: max(1, round(val_ratio * count)) for t, count in pool_counts.items()}
+    val_targets: dict[str, int] = {
+        attack_type: max(1, round(val_ratio * count)) for attack_type, count in pool_counts.items()
+    }
     train, val = _take_clusters(pool, val_targets, "validation")
     return [r for r, _ in golden], [r for r, _ in train], [r for r, _ in val]
 
