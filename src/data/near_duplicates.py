@@ -23,8 +23,9 @@ NEAR_DUPLICATE_THRESHOLD = 0.5
 # 42 bands of 3 rows find a pair at similarity 0.5 with probability above 0.99.
 BANDS = 42
 BAND_ROWS = 3
-_MERSENNE_PRIME = (1 << 61) - 1
-_SHINGLE_MODULUS = (1 << 31) - 1
+# Universal hashing modulus. Shingle hashes and the coefficients stay below it, so a * x + b
+# stays below 2**62 and uint64 arithmetic is exact.
+_PRIME = (1 << 31) - 1
 _HASH_SEED = 42
 _WORD = re.compile(r"\w+")
 
@@ -55,20 +56,20 @@ def jaccard(first: Shingles, second: Shingles) -> float:
 
 def _shingle_hash(shingle: tuple[str, ...]) -> int:
     digest = hashlib.blake2b(" ".join(shingle).encode("utf-8"), digest_size=4).digest()
-    return int.from_bytes(digest, "big") % _SHINGLE_MODULUS
+    return int.from_bytes(digest, "big") % _PRIME
 
 
 def _signatures(documents: Sequence[Shingles]) -> npt.NDArray[np.uint64]:
     rng = np.random.default_rng(_HASH_SEED)
     permutations = BANDS * BAND_ROWS
-    # Universal hashing (a * x + b) mod p with x < 2**31 and a, b < 2**30, so a * x + b stays
-    # below 2**62 and uint64 arithmetic is exact.
-    a = rng.integers(1, 1 << 30, size=permutations, dtype=np.uint64)
-    b = rng.integers(0, 1 << 30, size=permutations, dtype=np.uint64)
+    # (a * x + b) mod p must wrap around p to act as a permutation; without the reduction it is
+    # increasing in x, and every permutation would pick the same minimum shingle.
+    a = rng.integers(1, _PRIME, size=permutations, dtype=np.uint64)
+    b = rng.integers(0, _PRIME, size=permutations, dtype=np.uint64)
     signatures = np.empty((len(documents), permutations), dtype=np.uint64)
     for row, document in enumerate(documents):
         values = np.array([_shingle_hash(s) for s in document], dtype=np.uint64)
-        hashed = (np.outer(values, a) + b) % np.uint64(_MERSENNE_PRIME)
+        hashed = (np.outer(values, a) + b) % np.uint64(_PRIME)
         signatures[row] = hashed.min(axis=0)
     return signatures
 
