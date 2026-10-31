@@ -60,7 +60,7 @@ VALIDATION_SPLIT = "validation"
 EXPECTED_SPLITS = frozenset({TRAIN_SPLIT, VALIDATION_SPLIT})
 REQUIRED_COLUMNS = frozenset({"text", "label", "attack_type"})
 MAX_REPORTED_ROWS = 5
-# Mirrors the PromptRecord text limit in src/data/ingestion.py.
+# Mirrors the PromptRecord text limit in src/data/schema.py.
 MAX_TEXT_CHARACTERS = 10_000
 COMMIT_SHA = re.compile(r"[0-9a-f]{40}")
 

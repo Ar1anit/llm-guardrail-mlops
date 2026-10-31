@@ -41,6 +41,12 @@ before a model is promoted:
   overall false-positive rate (which now includes the hard negatives) are not comparable with
   reports on the earlier golden set. Thresholds can now be calibrated, starting from a baseline
   run on this set; the per-slice flag rates are the numbers to calibrate against.
+- **Near-duplicate leakage.** The first 900-row golden set was split row by row and had 291
+  near-duplicate pairs across splits (similarity >= 0.5), 153 of them between golden and
+  train, mostly jailbreak templates that appear in both jailbreak sources. Its jailbreak flag
+  rate overstated generalisation. Ingestion now splits by near-duplicate cluster and refuses
+  splits with any cross-split pair. Benchmark reports from before this change are not
+  comparable with later ones.
 - **Release gates are provisional.** `configs/evaluation/default.yaml` sets floors for recall,
   precision, the false-positive rate, the injection and jailbreak flag rates, and the minimum
   support for each slice. The benchmark exits non-zero when one fails or its metric is missing.

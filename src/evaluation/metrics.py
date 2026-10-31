@@ -11,7 +11,7 @@ import numpy.typing as npt
 
 Labels = npt.NDArray[np.int64]
 
-# Mirrors the PromptRecord label contract in src/data/ingestion.py.
+# Mirrors the PromptRecord label contract in src/data/schema.py.
 ID_TO_LABEL: Mapping[int, str] = MappingProxyType({0: "benign", 1: "malicious"})
 LABEL_TO_ID: Mapping[str, int] = MappingProxyType(
     {label: label_id for label_id, label in ID_TO_LABEL.items()},

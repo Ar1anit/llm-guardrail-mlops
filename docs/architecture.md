@@ -63,15 +63,28 @@ flowchart LR
    An input that arrives with both labels raises `LabelConflictError`. Changing the base model or
    `max_sequence_length` means re-running ingestion; the training leakage check reports when it
    is needed.
-4. **Split** off the golden set by a fixed quota per attack type (`GOLDEN_QUOTAS`: 300 benign
-   and 200 each of hard negatives, injections, and jailbreaks), stratified on source within each
-   type. The rest is split into train and validation, stratified on `attack_type`. A quota above
-   half of its type's rows raises, and so does data in which any attack type has no rows. The
-   quotas fix the golden class mix, so golden precision is not the precision at real traffic
-   prevalence.
-5. **Record lineage** in `data/raw/ingestion_manifest.json`: source revisions, licenses, configs
-   and files, rows read, rejected and kept, the seed, the golden quotas, attack-type counts for
-   each split, and source counts in the golden set.
+4. **Cluster near-duplicates** (`src/data/near_duplicates.py`). Exact deduplication misses
+   variants of one template: the same jailbreak with another persona name, or an injection with
+   a prefix. Two texts are near-duplicates when the Jaccard similarity of their case-folded word
+   3-grams is at least 0.5; MinHash LSH proposes candidate pairs and each is confirmed with the
+   exact similarity. Clusters are the transitive closure of that relation.
+5. **Split** by whole cluster, so no template has variants in two splits. The golden set takes a
+   fixed quota per attack type (`GOLDEN_QUOTAS`: 300 benign and 200 each of hard negatives,
+   injections, and jailbreaks); validation takes 15% of each type's remaining rows; train keeps
+   the rest. Clusters are visited in a seeded random order, and one that would overshoot a
+   target is skipped. A quota above half of its type's rows raises, and so do targets that
+   whole clusters cannot meet and data in which any attack type has no rows. The quotas fix the
+   golden class mix, so golden precision is not the precision at real traffic prevalence.
+6. **Validate** the splits with `src/data/validation.py` before anything is written: coverage,
+   golden quotas, exact duplicates, and near-duplicate pairs across splits. Any finding stops
+   ingestion. The report is written to `data/raw/validation_report.json`.
+7. **Record lineage** in `data/raw/ingestion_manifest.json`: source revisions, licenses, configs
+   and files, rows read, rejected and kept, the seed, the golden quotas, the near-duplicate
+   settings, attack-type counts for each split, and source counts in the golden set.
+
+`uv run python -m src.data.validation [--data-dir data] [--report path]` repeats the checks on
+the written files, adding the schema of every line and agreement with the manifest, and exits
+non-zero on any finding. Run it after `dvc pull` or after editing a split by hand.
 
 Logs and errors contain counts and row indices, never prompt text.
 

@@ -3,9 +3,12 @@
 Downloads pinned Hugging Face datasets, adds curated hard negatives, validates every row
 against ``PromptRecord``, and writes deterministic splits. The golden set takes a fixed quota
 of each ``attack_type`` (``GOLDEN_QUOTAS``), so every slice is large enough to measure; train
-and validation split the rest stratified on ``attack_type``:
+and validation split the rest in proportion to ``attack_type``. Splits are drawn by
+near-duplicate cluster (``src.data.near_duplicates``), so variants of one template never land
+in two splits, and ``src.data.validation`` checks them before anything is written:
 
 - data/raw/raw_combined.jsonl and data/raw/ingestion_manifest.json (source lineage)
+- data/raw/validation_report.json (the checks of ``src.data.validation``)
 - data/golden_eval.jsonl (held-out benchmark for release gates)
 - data/processed/train.jsonl
 - data/processed/val.jsonl
@@ -28,13 +31,20 @@ from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Literal, get_args
 
+import numpy as np
 from datasets import load_dataset  # type: ignore[import-untyped]  # datasets ships no py.typed marker
 from omegaconf import OmegaConf
-from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
-from sklearn.model_selection import train_test_split  # type: ignore[import-untyped]  # no stubs
+from pydantic import ValidationError
 from transformers import AutoTokenizer
+
+from src.data.near_duplicates import (
+    NEAR_DUPLICATE_THRESHOLD,
+    SHINGLE_SIZE,
+    near_duplicate_clusters,
+)
+from src.data.schema import ATTACK_TYPE_LABELS, ATTACK_TYPES, AttackType, PromptRecord
+from src.data.validation import normalized_text, validate_splits, write_report
 
 logger = logging.getLogger(__name__)
 
@@ -56,40 +66,6 @@ class IngestionError(ValueError):
 
 class LabelConflictError(IngestionError):
     """The same prompt text arrived with both labels."""
-
-
-# =====================================================================
-# 1. DATA CONTRACT / SCHEMA
-# =====================================================================
-AttackType = Literal["benign", "hard_negative", "injection", "jailbreak"]
-ATTACK_TYPES: tuple[AttackType, ...] = get_args(AttackType)
-# Each attack type implies one label: 0 = benign/safe, 1 = malicious/attack.
-ATTACK_TYPE_LABELS: Mapping[str, int] = MappingProxyType(
-    {"benign": 0, "hard_negative": 0, "injection": 1, "jailbreak": 1},
-)
-
-
-class PromptRecord(BaseModel):
-    """Data contract for individual prompt classification records."""
-
-    text: str = Field(..., min_length=3, max_length=10000)
-    label: Literal[0, 1]  # 0 = Benign/Safe, 1 = Malicious/Attack
-    attack_type: AttackType
-    source: str = Field(..., description="Origin dataset or generator")
-
-    @field_validator("text")
-    @classmethod
-    def clean_whitespace(cls, v: str) -> str:
-        cleaned = v.strip()
-        if not cleaned:
-            raise ValueError("Prompt text must not be empty or whitespace only.")
-        return cleaned
-
-    @model_validator(mode="after")
-    def label_matches_attack_type(self) -> PromptRecord:
-        if ATTACK_TYPE_LABELS[self.attack_type] != self.label:
-            raise ValueError(f"attack_type '{self.attack_type}' requires a different label.")
-        return self
 
 
 @dataclass(frozen=True, slots=True)
@@ -551,11 +527,6 @@ def model_input_key(spec: TokenizerSpec) -> Callable[[str], Hashable]:
     return key
 
 
-def normalized_text(text: str) -> str:
-    """Case- and whitespace-insensitive text; a tokenizer-free duplicate key."""
-    return " ".join(text.casefold().split())
-
-
 def deduplicate(
     records: Iterable[PromptRecord],
     key: Callable[[str], Hashable] = normalized_text,
@@ -590,36 +561,47 @@ def _require_every_attack_type(records: Sequence[PromptRecord]) -> None:
         )
 
 
-def _stratified_split(
-    records: Sequence[PromptRecord],
-    test_size: float | int,
-    stratify: Callable[[PromptRecord], str],
-) -> tuple[list[PromptRecord], list[PromptRecord]]:
-    kept, held_out = train_test_split(
-        list(records),
-        test_size=test_size,
-        stratify=[stratify(record) for record in records],
-        random_state=RANDOM_SEED,
-    )
-    return kept, held_out
+Clustered = Sequence[tuple[PromptRecord, int]]
 
 
-def _by_attack_type(record: PromptRecord) -> str:
-    return record.attack_type
+def _take_clusters(
+    rows: Clustered,
+    targets: Mapping[str, int],
+    split_name: str,
+) -> tuple[list[tuple[PromptRecord, int]], list[tuple[PromptRecord, int]]]:
+    """Move whole near-duplicate clusters out of ``rows`` until each type meets its target.
+
+    Clusters are visited in a seeded random order; one that would overshoot any target is
+    skipped. Returns (kept, taken) in the input order.
+    """
+    members: dict[int, list[int]] = {}
+    for index, (_, cluster) in enumerate(rows):
+        members.setdefault(cluster, []).append(index)
+    clusters = list(members.values())
+    remaining = dict(targets)
+    taken: set[int] = set()
+    for position in np.random.default_rng(RANDOM_SEED).permutation(len(clusters)):
+        if not any(remaining.values()):
+            break
+        indices = clusters[position]
+        counts = Counter(rows[index][0].attack_type for index in indices)
+        if all(count <= remaining.get(attack_type, 0) for attack_type, count in counts.items()):
+            for attack_type, count in counts.items():
+                remaining[attack_type] -= count
+            taken.update(indices)
+    short = {attack_type: count for attack_type, count in remaining.items() if count}
+    if short:
+        raise IngestionError(
+            f"Whole near-duplicate clusters cannot fill the {split_name} split; short by {short}.",
+        )
+    kept = [row for index, row in enumerate(rows) if index not in taken]
+    return kept, [row for index, row in enumerate(rows) if index in taken]
 
 
-def _by_source(record: PromptRecord) -> str:
-    return record.source
+def _check_golden_quotas(records: Sequence[PromptRecord], quotas: Mapping[str, int]) -> None:
+    """Each attack type needs a quota of at least 1 and at most half of its rows.
 
-
-def _hold_out_golden(
-    records: Sequence[PromptRecord],
-    quotas: Mapping[str, int],
-) -> tuple[list[PromptRecord], list[PromptRecord]]:
-    """Take ``quotas[attack_type]`` rows of each type, stratified on source within the type.
-
-    A quota above half the rows of its type raises, so training keeps at least as many rows of
-    each type as the golden set measures.
+    The upper bound keeps at least as many rows of each type for training as golden measures.
     """
     unknown = sorted(set(quotas) - set(ATTACK_TYPES))
     missing = [attack_type for attack_type in ATTACK_TYPES if attack_type not in quotas]
@@ -627,25 +609,14 @@ def _hold_out_golden(
         raise IngestionError(
             f"Golden quotas must name each attack type once; unknown {unknown}, missing {missing}.",
         )
-    pool: list[PromptRecord] = []
-    golden: list[PromptRecord] = []
+    counts = Counter(record.attack_type for record in records)
     for attack_type in ATTACK_TYPES:
-        rows = [record for record in records if record.attack_type == attack_type]
         quota = quotas[attack_type]
-        if quota < 1 or 2 * quota > len(rows):
+        if quota < 1 or 2 * quota > counts[attack_type]:
             raise IngestionError(
                 f"Golden quota {quota} for '{attack_type}' must be at least 1 and at most half "
-                f"of its {len(rows)} rows.",
+                f"of its {counts[attack_type]} rows.",
             )
-        sources = Counter(record.source for record in rows)
-        # Stratifying needs two rows per source and a quota of at least one row per source;
-        # otherwise the type is split plainly.
-        stratifiable = min(sources.values()) > 1 and quota >= len(sources)
-        by_source = _by_source if stratifiable else _by_attack_type
-        kept, held_out = _stratified_split(rows, quota, by_source)
-        pool.extend(kept)
-        golden.extend(held_out)
-    return pool, golden
 
 
 def split_records(
@@ -653,11 +624,22 @@ def split_records(
     golden_quotas: Mapping[str, int],
     val_ratio: float,
 ) -> tuple[list[PromptRecord], list[PromptRecord], list[PromptRecord]]:
-    """Return (golden, train, val): golden takes each type's quota, train and val the rest."""
+    """Return (golden, train, val), drawn by near-duplicate cluster.
+
+    Golden takes each type's quota. Validation takes ``val_ratio`` of each type's remaining
+    rows, rounded and at least one; train keeps the rest.
+    """
     _require_every_attack_type(records)
-    pool, golden = _hold_out_golden(records, golden_quotas)
-    train, val = _stratified_split(pool, val_ratio, _by_attack_type)
-    return golden, train, val
+    _check_golden_quotas(records, golden_quotas)
+    clusters = near_duplicate_clusters([record.text for record in records])
+    rows = list(zip(records, clusters, strict=True))
+    pool, golden = _take_clusters(rows, golden_quotas, "golden")
+    pool_counts = Counter(record.attack_type for record, _ in pool)
+    val_targets: dict[str, int] = {
+        attack_type: max(1, round(val_ratio * count)) for attack_type, count in pool_counts.items()
+    }
+    train, val = _take_clusters(pool, val_targets, "validation")
+    return [r for r, _ in golden], [r for r, _ in train], [r for r, _ in val]
 
 
 def write_jsonl(records: list[PromptRecord], file_path: Path) -> None:
@@ -667,11 +649,6 @@ def write_jsonl(records: list[PromptRecord], file_path: Path) -> None:
         for r in records:
             f.write(r.model_dump_json() + "\n")
     logger.info("Saved %d records to %s", len(records), file_path)
-
-
-def _attack_type_counts(records: Sequence[PromptRecord]) -> dict[str, int]:
-    counts = Counter(record.attack_type for record in records)
-    return {attack_type: counts[attack_type] for attack_type in ATTACK_TYPES}
 
 
 def run_pipeline(
@@ -700,14 +677,19 @@ def run_pipeline(
     records = deduplicate(all_records, model_input_key(tokenizer))
     logger.info("Total records after deduplication: %d", len(records))
     golden, train, val = split_records(records, golden_quotas, val_ratio)
+    splits = {"golden": golden, "train": train, "val": val}
+    report = validate_splits(splits, golden_quotas)
+    if not report.ok:
+        details = "; ".join(f"{f.check}: {f.message}" for f in report.findings)
+        raise IngestionError(f"The splits fail validation, so nothing was written: {details}")
 
     raw_dir = output_dir / "raw"
     write_jsonl(records, raw_dir / "raw_combined.jsonl")
     write_jsonl(golden, output_dir / "golden_eval.jsonl")
     write_jsonl(train, output_dir / "processed" / "train.jsonl")
     write_jsonl(val, output_dir / "processed" / "val.jsonl")
+    write_report(report, raw_dir / "validation_report.json")
 
-    splits = {"golden": golden, "train": train, "val": val}
     lineage = {
         "random_seed": RANDOM_SEED,
         "golden_quotas": dict(golden_quotas),
@@ -731,7 +713,11 @@ def run_pipeline(
             "revision": tokenizer.revision,
             "max_sequence_length": tokenizer.max_sequence_length,
         },
-        "attack_type_counts": {name: _attack_type_counts(rows) for name, rows in splits.items()},
+        "near_duplicate_split": {
+            "shingle_size": SHINGLE_SIZE,
+            "threshold": NEAR_DUPLICATE_THRESHOLD,
+        },
+        "attack_type_counts": report.attack_type_counts,
         "golden_source_counts": dict(sorted(Counter(r.source for r in golden).items())),
     }
     (raw_dir / "ingestion_manifest.json").write_text(
@@ -739,7 +725,7 @@ def run_pipeline(
         encoding="utf-8",
     )
     for name, rows in splits.items():
-        logger.info("%s: %d rows | %s", name, len(rows), _attack_type_counts(rows))
+        logger.info("%s: %d rows | %s", name, len(rows), report.attack_type_counts[name])
 
 
 def main(argv: Sequence[str] | None = None) -> int:
